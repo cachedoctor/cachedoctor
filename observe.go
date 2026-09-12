@@ -176,7 +176,7 @@ func (o *observer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var buf capture
 	flushCopy(w, io.TeeReader(resp.Body, &buf))
 
-	o.observe(prov, r.URL.Path, resp.StatusCode, body, buf.Bytes())
+	o.observe(prov, r.URL.Path, resp.StatusCode, body, buf.Bytes(), buf.seamAt())
 }
 
 // captureLimit is how many bytes capture retains from each end of a response.
@@ -230,6 +230,16 @@ func (c *capture) Bytes() []byte {
 	return append(out, c.tail...)
 }
 
+// seamAt returns the byte offset of the head/tail seam in Bytes(), or -1 if
+// nothing was elided. A numeric match ending exactly at the seam may be a
+// truncated number and must not be trusted.
+func (c *capture) seamAt() int {
+	if !c.truncated {
+		return -1
+	}
+	return len(c.head)
+}
+
 func hopByHop(h string) bool {
 	switch strings.ToLower(h) {
 	case "connection", "keep-alive", "transfer-encoding", "te", "trailer",
@@ -262,7 +272,7 @@ func flushCopy(w http.ResponseWriter, r io.Reader) {
 	}
 }
 
-func (o *observer) observe(prov, path string, status int, reqBody, respBody []byte) {
+func (o *observer) observe(prov, path string, status int, reqBody, respBody []byte, respSeam int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.n++
@@ -309,7 +319,7 @@ func (o *observer) observe(prov, path string, status int, reqBody, respBody []by
 		seen[pfx] = true
 	}
 
-	u := extractUsageBytes(respBody, model)
+	u := extractUsageBytes(respBody, model, respSeam)
 	hitStr := "—"
 	if inR, readR, writeR, ok := rateFor(u.model); ok && u.in+u.cacheRead+u.cacheWrite > 0 {
 		getAgg(o.byModel, u.model).add(u, inR, readR, writeR)
@@ -353,13 +363,18 @@ var usageFieldRe = func() map[string]*regexp.Regexp {
 
 // extractUsageBytes pulls token counts from a response body (JSON or SSE) by
 // scanning for the usage fields — robust to Anthropic's message_start/_delta
-// framing and OpenAI's nested cached_tokens.
-func extractUsageBytes(b []byte, model string) urec {
+// framing and OpenAI's nested cached_tokens. seam is the elision boundary
+// from capture.seamAt() (-1 if none): a number ending exactly there may be
+// truncated and is discarded rather than trusted.
+func extractUsageBytes(b []byte, model string, seam int) urec {
 	u := urec{model: model}
 	maxField := func(name string) float64 {
 		var mx float64
-		for _, m := range usageFieldRe[name].FindAllSubmatch(b, -1) {
-			if v, err := strconv.ParseFloat(string(m[1]), 64); err == nil && v > mx {
+		for _, loc := range usageFieldRe[name].FindAllSubmatchIndex(b, -1) {
+			if loc[3] == seam {
+				continue // possibly cut mid-number at the seam
+			}
+			if v, err := strconv.ParseFloat(string(b[loc[2]:loc[3]]), 64); err == nil && v > mx {
 				mx = v
 			}
 		}

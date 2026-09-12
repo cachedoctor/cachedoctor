@@ -143,14 +143,17 @@ func cmdAnalyze(path string) int {
 	}
 
 	span := gMax - gMin
+	// Below an hour of observed span, extrapolating to a month multiplies
+	// noise by up to 2.6M — report raw totals instead of a projection.
+	const minProjSpan = 3600.0
 	monthly := func(v float64) float64 {
-		if span > 0 {
+		if span >= minProjSpan {
 			return v * (30 * 86400 / span)
 		}
 		return v
 	}
 	proj := "/mo"
-	if span <= 0 {
+	if span < minProjSpan {
 		proj = ""
 	}
 

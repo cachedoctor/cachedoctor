@@ -332,7 +332,7 @@ data: {"usage":{"input_tokens":10,"cache_read_input_tokens":1200}}
 event: message_delta
 data: {"usage":{"output_tokens":33}}
 `)
-	u := extractUsageBytes(body, "claude-sonnet-4-5")
+	u := extractUsageBytes(body, "claude-sonnet-4-5", -1)
 	if u.in != 10 || u.cacheRead != 1200 || u.out != 33 {
 		t.Errorf("got %+v", u)
 	}
@@ -397,6 +397,40 @@ func TestInjectIncludeUsage(t *testing.T) {
 	}
 }
 
+func TestSeamTruncatedNumberDiscarded(t *testing.T) {
+	// A usage number cut exactly at the capture seam must be discarded,
+	// not read as its truncated prefix.
+	var c capture
+	head := `{"usage":{"input_tokens": 987`
+	c.Write(bytes.Repeat([]byte("x"), captureLimit-len(head)))
+	c.Write([]byte(head))                            // head ends after "...987"
+	c.Write([]byte("654}}"))                         // rest of the number lands in the tail
+	c.Write(bytes.Repeat([]byte("y"), captureLimit)) // flush it away
+	u := extractUsageBytes(c.Bytes(), "m", c.seamAt())
+	if u.in != 0 {
+		t.Errorf("truncated seam number trusted: in=%v, want 0", u.in)
+	}
+	// but a number safely inside the head is still read
+	var c2 capture
+	c2.Write([]byte(`{"usage":{"input_tokens": 42} `))
+	c2.Write(bytes.Repeat([]byte("y"), 3*captureLimit))
+	if u := extractUsageBytes(c2.Bytes(), "m", c2.seamAt()); u.in != 42 {
+		t.Errorf("intact head number lost: in=%v, want 42", u.in)
+	}
+}
+
+func TestDisplayWidth(t *testing.T) {
+	if w := displayWidth("abc"); w != 3 {
+		t.Errorf("ascii: %d", w)
+	}
+	if w := displayWidth("提示詞"); w != 6 {
+		t.Errorf("CJK should be double-width: %d", w)
+	}
+	if w := displayWidth("a提b"); w != 4 {
+		t.Errorf("mixed: %d", w)
+	}
+}
+
 func TestCaptureBounded(t *testing.T) {
 	var c capture
 	head := []byte(`data: {"usage":{"input_tokens":10,"cache_read_input_tokens":1200}}` + "\n")
@@ -411,7 +445,7 @@ func TestCaptureBounded(t *testing.T) {
 	if len(got) > 2*captureLimit+1 {
 		t.Errorf("capture retained %d bytes, want <= %d", len(got), 2*captureLimit+1)
 	}
-	u := extractUsageBytes(got, "claude-sonnet-4-5")
+	u := extractUsageBytes(got, "claude-sonnet-4-5", c.seamAt())
 	if u.in != 10 || u.cacheRead != 1200 || u.out != 33 {
 		t.Errorf("usage from truncated stream: got %+v", u)
 	}
@@ -436,7 +470,7 @@ func TestCaptureNoSeamMatch(t *testing.T) {
 	c.Write([]byte(`"input_tokens":`)) // head ends exactly with the key
 	c.Write([]byte("123"))             // tail begins with digits
 	c.Write(bytes.Repeat([]byte("y"), captureLimit-3))
-	u := extractUsageBytes(c.Bytes(), "claude-sonnet-4-5")
+	u := extractUsageBytes(c.Bytes(), "claude-sonnet-4-5", c.seamAt())
 	if u.in != 0 {
 		t.Errorf("seam produced a false match: in = %v, want 0", u.in)
 	}

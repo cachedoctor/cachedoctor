@@ -79,13 +79,38 @@ func firstDiff(a, b string) string {
 	if start == 0 {
 		ell = ""
 	}
-	// Caret alignment counts runes of the printed prefix, not bytes (still
-	// approximate for double-width CJK glyphs).
+	// Caret alignment uses display columns: CJK and fullwidth glyphs
+	// occupy two terminal cells.
 	pre := strings.ReplaceAll(safe(a, start, i), "\n", "⏎")
-	pad := min(utf8.RuneCountInString(ell)+utf8.RuneCountInString(pre), 60)
+	pad := min(displayWidth(ell)+displayWidth(pre), 60)
 	return fmt.Sprintf("first divergence at byte %d:\n      A: %s%s\n      B: %s%s\n         %s^", i,
 		ell, clip(safe(a, start, i+30), 60), ell, clip(safe(b, start, i+30), 60),
 		strings.Repeat(" ", pad))
+}
+
+// displayWidth is the terminal-column width of s: wide (East Asian W/F)
+// runes count 2, everything else 1. The ranges cover CJK, kana, hangul, and
+// fullwidth forms — the cases that actually show up in prompts.
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		switch {
+		case r >= 0x1100 && r <= 0x115F, // hangul jamo
+			r >= 0x2E80 && r <= 0x303E,   // CJK radicals, punctuation
+			r >= 0x3041 && r <= 0x33FF,   // kana, CJK symbols
+			r >= 0x3400 && r <= 0x4DBF,   // CJK ext A
+			r >= 0x4E00 && r <= 0x9FFF,   // CJK unified
+			r >= 0xAC00 && r <= 0xD7A3,   // hangul syllables
+			r >= 0xF900 && r <= 0xFAFF,   // CJK compat
+			r >= 0xFE30 && r <= 0xFE4F,   // CJK compat forms
+			r >= 0xFF00 && r <= 0xFF60,   // fullwidth forms
+			r >= 0x20000 && r <= 0x2FFFD: // CJK ext B+
+			w += 2
+		default:
+			w++
+		}
+	}
+	return w
 }
 
 // runeFloor moves i left to the nearest rune boundary so byte slicing never
