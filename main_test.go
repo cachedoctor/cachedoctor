@@ -146,9 +146,13 @@ func TestRateFor(t *testing.T) {
 	if _, _, _, ok := rateFor("claude-sonnet-4-5-20991231"); !ok {
 		t.Error("date-suffix strip failed")
 	}
-	// family fallback for an unknown future model
-	if _, _, _, ok := rateFor("claude-sonnet-9-experimental"); !ok {
-		t.Error("family fallback failed")
+	// family fallback for an unknown future model — must track the family's
+	// NEWEST priced entry, not a stale generation
+	if in, read, _, ok := rateFor("claude-sonnet-9-experimental"); !ok || in != 2.0 || read != 0.2 {
+		t.Errorf("sonnet family fallback: got in=%v read=%v ok=%v, want claude-sonnet-5 rates (2.0/0.2)", in, read, ok)
+	}
+	if in, _, _, ok := rateFor("gpt-7-preview"); !ok || in != 1.25 {
+		t.Errorf("gpt family fallback: got in=%v ok=%v, want gpt-5 rates (1.25)", in, ok)
 	}
 	// unsupported provider
 	if _, _, _, ok := rateFor("gemini-2.5-pro"); ok {

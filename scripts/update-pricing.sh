@@ -21,3 +21,5 @@ for k, v in d.items():
 json.dump(out, open('pricing.json', 'w'), separators=(',', ':'), sort_keys=True)
 print(f"pricing.json: {len(out)} Anthropic/OpenAI models")
 PY
+
+echo "reminder: review familyRep in pricing.go — representatives should point at each family's newest priced entry."

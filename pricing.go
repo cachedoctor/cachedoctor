@@ -26,14 +26,16 @@ var dateSuffix = regexp.MustCompile(`(-\d{8}|-\d{4}-\d{2}-\d{2}|-latest|-v\d+:\d
 
 // familyRep maps a model-family token to a representative LiteLLM key, so a
 // model not priced exactly (a newer or private name) still gets its family's
-// real rate. Ordered specific-first.
+// real rate. Ordered specific-first. Representatives should track each
+// family's NEWEST priced entry — revisit after scripts/update-pricing.sh
+// refreshes the snapshot, or unknown names get priced a generation stale.
 var familyRep = []struct{ token, key string }{
-	{"opus", "claude-opus-4-1"},
-	{"sonnet", "claude-sonnet-4-5"},
+	{"opus", "claude-opus-4-8"},
+	{"sonnet", "claude-sonnet-5"},
 	{"haiku", "claude-haiku-4-5"},
 	{"gpt-4o-mini", "gpt-4o-mini"},
-	{"o4", "o1"}, {"o3", "o1"}, {"o1", "o1"},
-	{"chatgpt", "gpt-4o"}, {"gpt", "gpt-4o"}, {"luna", "gpt-4o"},
+	{"o4", "o4-mini"}, {"o3", "o3"}, {"o1", "o1"},
+	{"chatgpt", "chatgpt-4o-latest"}, {"luna", "gpt-5.6-luna"}, {"gpt", "gpt-5"},
 }
 
 // rateFor returns per-1M-token USD rates (input, cache-read, cache-write) from
