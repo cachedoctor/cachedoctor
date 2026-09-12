@@ -151,8 +151,15 @@ func TestRateFor(t *testing.T) {
 	if in, read, _, ok := rateFor("claude-sonnet-9-experimental"); !ok || in != 2.0 || read != 0.2 {
 		t.Errorf("sonnet family fallback: got in=%v read=%v ok=%v, want claude-sonnet-5 rates (2.0/0.2)", in, read, ok)
 	}
-	if in, _, _, ok := rateFor("gpt-7-preview"); !ok || in != 1.25 {
-		t.Errorf("gpt family fallback: got in=%v ok=%v, want gpt-5 rates (1.25)", in, ok)
+	if in, _, _, ok := rateFor("gpt-7-preview"); !ok || in != 10.0 {
+		t.Errorf("gpt family fallback: got in=%v ok=%v, want gpt-6-astra rates (10.0)", in, ok)
+	}
+	// variant families match before the generic gpt token
+	if in, _, _, ok := rateFor("gpt-6.1-luna-preview"); !ok || in != 0.2 {
+		t.Errorf("luna family fallback: got in=%v ok=%v, want gpt-5.6-luna rates (0.2)", in, ok)
+	}
+	if in, _, _, ok := rateFor("gpt-5.7-codex"); !ok || in != 1.75 {
+		t.Errorf("codex family fallback: got in=%v ok=%v, want gpt-5.3-codex rates (1.75)", in, ok)
 	}
 	if in, _, _, ok := rateFor("claude-opus-6-internal"); !ok || in != 5.0 {
 		t.Errorf("opus family fallback: got in=%v ok=%v, want claude-opus-5 rates (5.0)", in, ok)
