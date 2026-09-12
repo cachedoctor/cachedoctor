@@ -1,0 +1,13 @@
+{
+  "model": "gpt-5.6-luna",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are helpful."
+    },
+    {
+      "role": "user",
+      "content": "hi"
+    }
+  ]
+}

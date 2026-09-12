@@ -1,0 +1,9 @@
+# built binary
+/cachedoctor
+*.exe
+
+# macOS
+.DS_Store
+
+# internal design notes — not public
+DESIGN.md

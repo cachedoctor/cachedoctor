@@ -1,0 +1,45 @@
+name: cachedoctor
+description: Fail the build on prompt-cache / LLM-cost regressions, and comment the impact on the PR.
+branding:
+  icon: activity
+  color: green
+
+inputs:
+  fixtures:
+    description: Glob of Anthropic/OpenAI request JSON fixtures to check (default **/*.cachedoctor.json).
+    default: ""
+  base-ref:
+    description: Base git ref to diff changed fixtures against (enables regression detection). Empty to skip.
+    default: ""
+  version:
+    description: >-
+      cachedoctor version to install (go module version). Empty (default) builds
+      the source bundled with this action, so script and binary always match.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+        cache: false
+    - name: Install cachedoctor
+      shell: bash
+      run: |
+        BIN_DIR="$RUNNER_TEMP/cachedoctor-bin"
+        mkdir -p "$BIN_DIR"
+        if [ -n "${{ inputs.version }}" ]; then
+          GOBIN="$BIN_DIR" go install github.com/cachedoctor/cachedoctor@${{ inputs.version }}
+        else
+          (cd "${{ github.action_path }}" && go build -o "$BIN_DIR/cachedoctor" .)
+        fi
+        echo "$BIN_DIR" >> "$GITHUB_PATH"
+    - name: Run cache/cost gate
+      shell: bash
+      env:
+        CACHEDOCTOR_FIXTURES: ${{ inputs.fixtures }}
+        CACHEDOCTOR_BASE: ${{ inputs.base-ref }}
+        CACHEDOCTOR_PR: ${{ github.event.pull_request.number }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: bash "${{ github.action_path }}/scripts/ci-gate.sh"

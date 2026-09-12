@@ -1,0 +1,9 @@
+{
+  "model": "claude-sonnet-4-5",
+  "system": "You are a coding assistant. Be precise.",
+  "tools": [
+    {"name":"run_tests","description":"Run tests.","input_schema":{"type":"object"}},
+    {"name":"search_code","description":"Search the repo.","input_schema":{"type":"object"}}
+  ],
+  "messages": [{"role":"user","content":"hi"}]
+}
