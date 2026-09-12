@@ -7,6 +7,31 @@ misconfigured cache still returns a correct response; you just quietly pay full
 price and never notice until the bill. cachedoctor tells you whether your cache
 is working, *why* it isn't, and how much it's costing you.
 
+## Where caching applies (is this you?)
+
+Caching applies wherever **the same tokens lead the prompt on consecutive calls**
+— and in most production LLM apps the stable prefix is 80–95% of every request.
+A support bot resending a 10k-token system-prompt-plus-tools prefix on 100k
+calls/day pays ~$3,000/day for it uncached vs ~$300/day cached (Sonnet rates).
+Every row below has a way to *silently* break byte-identity — that's the leak
+this tool finds:
+
+| Use case | Stable prefix | What silently kills the cache |
+|---|---|---|
+| Support / chat bots | policies + tool definitions | a timestamp in the system prompt |
+| Coding agents, IDE assistants | system prompt + tools + repo context | prefix drift between call types |
+| Document Q&A ("chat with your PDF") | the 50–200k-token document | re-serializing the doc per question |
+| RAG | instructions + retrieved docs | shuffled retrieval order |
+| LLM-as-judge / evals | rubric + few-shot examples | rebuilt example order |
+| Classification / extraction pipelines | label definitions + examples | volatile IDs in the template |
+| Multi-agent fan-out | shared system prompt + tools | tools from an unordered map — random per worker |
+| Scheduled batch jobs | instruction preamble | call cadence longer than the TTL: all writes, no reads |
+| Voice / real-time agents | persona + safety rules + state | per-utterance session metadata up top |
+| Translation / localization | style guide + glossary | glossary regenerated in a different order |
+
+None of these misses throw an error — the response is still correct, you just
+pay full price. Run `observe` against real traffic and see which rows you're in.
+
 ## Install
 
 ```sh
