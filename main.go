@@ -93,12 +93,19 @@ func peekModel(b []byte) string {
 
 func providerOf(model string) string {
 	m := strings.ToLower(model)
+	// Provider signals in the routing prefix decide before it's stripped:
+	// "openai/davinci-002" must not route as bare "davinci-002".
+	if strings.Contains(m, "openai") {
+		return "openai"
+	}
+	if strings.Contains(m, "anthropic") || strings.Contains(m, "claude") {
+		return "anthropic"
+	}
 	if i := strings.LastIndex(m, "/"); i >= 0 {
 		m = m[i+1:] // "azure/o1" must route like "o1"
 	}
 	switch {
-	case strings.Contains(m, "gpt"), strings.Contains(m, "openai"),
-		strings.Contains(m, "chatgpt"), strings.Contains(m, "luna"),
+	case strings.Contains(m, "gpt"), strings.Contains(m, "chatgpt"), strings.Contains(m, "luna"),
 		strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
 		return "openai"
 	}
@@ -164,7 +171,13 @@ func cmdCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	exact := fs.Bool("exact", false,
 		"exact Anthropic token counts via the free count_tokens API (needs ANTHROPIC_API_KEY; two metadata calls, nothing billed, key never stored). OpenAI counts are always exact (embedded o200k tokenizer).")
-	if fs.Parse(args) != nil || fs.NArg() != 1 {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0) // -h is a request, not a usage error
+		}
+		usage()
+	}
+	if fs.NArg() != 1 {
 		usage()
 	}
 	path := fs.Arg(0)

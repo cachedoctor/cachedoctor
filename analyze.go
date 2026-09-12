@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -371,8 +372,12 @@ func parseTS(m map[string]any) float64 {
 
 // epochSeconds normalizes an epoch that may be in ms/µs/ns (pino, Bunyan, and
 // most JS loggers emit milliseconds) — otherwise the monthly projection is
-// off by 1000x or more.
+// off by 1000x or more. Non-finite input ("Infinity" parses as a valid
+// float!) is rejected, not looped on forever.
 func epochSeconds(v float64) float64 {
+	if math.IsInf(v, 0) || math.IsNaN(v) {
+		return 0
+	}
 	for v > 1e12 { // seconds-scale epochs stay < 1e12 until the year 33658
 		v /= 1000
 	}

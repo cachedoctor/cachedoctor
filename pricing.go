@@ -44,10 +44,13 @@ var familyRep = []struct{ token, key string }{
 	{"o1-mini", "o3-mini"}, {"o3-mini", "o3-mini"}, {"o4-mini", "o4-mini"},
 	{"o4", "o4-mini"}, {"o3", "o3"}, {"o1", "o1"},
 	{"chatgpt", "chatgpt-4o-latest"},
-	{"codex", "gpt-5.3-codex"}, {"nano", "gpt-5.4-nano"},
-	{"cyber", "gpt-5.6-cyber"}, {"sol", "gpt-5.6-sol"},
-	{"terra", "gpt-5.6-terra"}, {"luna", "gpt-5.6-luna"},
-	{"astra", "gpt-6-astra"}, {"gpt", "gpt-6-astra"},
+	// variant tokens are dash-anchored: a bare substring priced Upstage's
+	// "solar-pro" as gpt-5.6-sol and "cybertron-7b" as gpt-5.6-cyber —
+	// confident wrong money numbers for third-party models
+	{"-codex", "gpt-5.3-codex"}, {"-nano", "gpt-5.4-nano"},
+	{"-cyber", "gpt-5.6-cyber"}, {"-sol", "gpt-5.6-sol"},
+	{"-terra", "gpt-5.6-terra"}, {"-luna", "gpt-5.6-luna"},
+	{"-astra", "gpt-6-astra"}, {"gpt", "gpt-6-astra"},
 }
 
 // rateFor returns per-1M-token USD rates (input, cache-read, cache-write) from

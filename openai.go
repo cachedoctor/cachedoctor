@@ -32,7 +32,9 @@ type OAStreamOptions struct {
 }
 
 func (r *OARequest) reportsUsage() bool {
-	if len(r.Input) > 0 || r.Instructions != "" {
+	// "input": null is not a Responses request — clients that serialize
+	// unused fields as null must keep their Chat Completions WARN.
+	if (len(r.Input) > 0 && !bytes.Equal(bytes.TrimSpace(r.Input), []byte("null"))) || r.Instructions != "" {
 		return true // Responses API streams always include usage
 	}
 	return !r.Stream || (r.StreamOptions != nil && r.StreamOptions.IncludeUsage)

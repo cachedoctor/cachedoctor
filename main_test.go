@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -281,11 +282,25 @@ func TestEpochSeconds(t *testing.T) {
 			t.Errorf("epochSeconds(%v) = %v, want %v", v, got, sec)
 		}
 	}
+	// non-finite input must terminate ("Infinity" parses as a valid float)
+	if got := epochSeconds(math.Inf(1)); got != 0 {
+		t.Errorf("epochSeconds(+Inf) = %v, want 0", got)
+	}
+	if got := epochSeconds(math.NaN()); got != 0 {
+		t.Errorf("epochSeconds(NaN) = %v, want 0", got)
+	}
+	if got := parseTS(map[string]any{"timestamp": "Infinity"}); got != 0 {
+		t.Errorf("parseTS(Infinity) = %v, want 0", got)
+	}
 }
 
 func TestRateForGuards(t *testing.T) {
 	// substring lookalikes and open-weights models must not be priced
-	for _, m := range []string{"llama-3.1-sonnetto", "gpt-oss-120b", "groq/gpt-oss-120b", "gemini-2.5-flash"} {
+	for _, m := range []string{
+		"llama-3.1-sonnetto", "gpt-oss-120b", "groq/gpt-oss-120b", "gemini-2.5-flash",
+		// third-party families that collided with bare variant tokens
+		"solar-pro", "upstage/solar-pro2", "cybertron-7b", "terranova-1", "nano-llm-v1", "codexglue-base",
+	} {
 		if _, _, _, ok := rateFor(m); ok {
 			t.Errorf("rateFor(%q): priced, want unsupported", m)
 		}
@@ -320,8 +335,34 @@ func TestResponsesAPIBodies(t *testing.T) {
 }
 
 func TestProviderOfPrefixed(t *testing.T) {
-	if got := providerOf("azure/o1-mini"); got != "openai" {
-		t.Errorf("azure/o1-mini routed to %q", got)
+	cases := map[string]string{
+		"azure/o1-mini":            "openai",
+		"openai/davinci-002":       "openai", // prefix is the only signal
+		"openai/codex-mini-latest": "openai",
+		"anthropic/claude-x":       "anthropic",
+	}
+	for m, want := range cases {
+		if got := providerOf(m); got != want {
+			t.Errorf("providerOf(%q) = %q, want %q", m, got, want)
+		}
+	}
+}
+
+func TestReportsUsageNullInput(t *testing.T) {
+	// "input": null must not suppress the Chat Completions streaming WARN
+	body := []byte(`{"model":"gpt-4o","stream":true,"input":null,"messages":[{"role":"user","content":"hi"}]}`)
+	fs, err := checkBytes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range fs {
+		if strings.Contains(f.Title, "usage reporting") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("null input suppressed the streaming-usage WARN")
 	}
 }
 
