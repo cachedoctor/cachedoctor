@@ -33,9 +33,15 @@ var familyRep = []struct{ token, key string }{
 	{"fable", "claude-fable-5-1"},
 	{"mythos", "claude-mythos-5-1"},
 	{"opus", "claude-opus-5"},
+	// pre-4 sonnet generations cost more than sonnet-5; keep them at their
+	// own tier ($3/M) rather than the newest one
+	{"3-5-sonnet", "claude-3-7-sonnet-20250219"},
+	{"3-7-sonnet", "claude-3-7-sonnet-20250219"},
 	{"sonnet", "claude-sonnet-5"},
 	{"haiku", "claude-haiku-4-5"},
 	{"gpt-4o-mini", "gpt-4o-mini"},
+	// o1-mini itself isn't in the trimmed snapshot; o3-mini is its price tier
+	{"o1-mini", "o3-mini"}, {"o3-mini", "o3-mini"}, {"o4-mini", "o4-mini"},
 	{"o4", "o4-mini"}, {"o3", "o3"}, {"o1", "o1"},
 	{"chatgpt", "chatgpt-4o-latest"},
 	{"codex", "gpt-5.3-codex"}, {"nano", "gpt-5.4-nano"},
@@ -50,6 +56,14 @@ func rateFor(model string) (in, read, write float64, ok bool) {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if i := strings.LastIndex(m, "/"); i >= 0 {
 		m = m[i+1:] // strip a provider prefix like "anthropic/"
+	}
+	// Not Anthropic/OpenAI: a name like "llama-3.1-sonnetto" or an
+	// open-weights "gpt-oss-120b" must not be priced by substring match —
+	// confidently wrong rates are worse than "unsupported, skipped".
+	for _, other := range []string{"llama", "gemini", "mistral", "mixtral", "qwen", "deepseek", "grok", "command", "gpt-oss"} {
+		if strings.Contains(m, other) {
+			return 0, 0, 0, false
+		}
 	}
 	keys := []string{m}
 	if t := dateSuffix.ReplaceAllString(m, ""); t != m {

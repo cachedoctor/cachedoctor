@@ -43,7 +43,8 @@ func main() {
 	case "observe":
 		os.Exit(cmdObserve(os.Args[2:]))
 	case "-h", "--help", "help":
-		usage()
+		usageTo(os.Stdout)
+		os.Exit(0) // asking for help is not a usage error
 	default:
 		fmt.Fprintf(os.Stderr, "cachedoctor: unknown command %q\n", os.Args[1])
 		usage()
@@ -51,7 +52,12 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `cachedoctor — why your LLM prompt cache isn't saving you money
+	usageTo(os.Stderr)
+	os.Exit(64)
+}
+
+func usageTo(w io.Writer) {
+	fmt.Fprint(w, `cachedoctor — why your LLM prompt cache isn't saving you money
 
 usage:
   cachedoctor check [--exact] <request.json>    scan one Anthropic request for cache anti-patterns
@@ -66,7 +72,6 @@ count_tokens metadata calls — nothing is billed, the key is never stored).
 check exits 2 if any high-severity issue is found (useful in CI).
 Anthropic and OpenAI are supported; other providers in a log are skipped.
 `)
-	os.Exit(64)
 }
 
 // readInput reads a file, or stdin when path is "-".
@@ -88,6 +93,9 @@ func peekModel(b []byte) string {
 
 func providerOf(model string) string {
 	m := strings.ToLower(model)
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:] // "azure/o1" must route like "o1"
+	}
 	switch {
 	case strings.Contains(m, "gpt"), strings.Contains(m, "openai"),
 		strings.Contains(m, "chatgpt"), strings.Contains(m, "luna"),
@@ -97,8 +105,26 @@ func providerOf(model string) string {
 	return "anthropic"
 }
 
+// isJSONObject reports whether b's first significant byte opens an object —
+// `null`, arrays, and bare strings unmarshal into our structs as harmless
+// no-ops and would get a diagnostic verdict instead of an error.
+func isJSONObject(b []byte) bool {
+	for _, c := range b {
+		switch c {
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			return c == '{'
+		}
+	}
+	return false
+}
+
 // checkBytes dispatches a request body to the right provider's checks.
 func checkBytes(b []byte) ([]Finding, error) {
+	if !isJSONObject(b) {
+		return nil, errors.New("not a request object")
+	}
 	if providerOf(peekModel(b)) == "openai" {
 		var oa OARequest
 		if err := json.Unmarshal(b, &oa); err != nil {
@@ -115,6 +141,9 @@ func checkBytes(b []byte) ([]Finding, error) {
 
 // diffBytes dispatches a pair of request bodies to the right provider's diff.
 func diffBytes(ba, bb []byte) ([]Finding, error) {
+	if !isJSONObject(ba) || !isJSONObject(bb) {
+		return nil, errors.New("invalid JSON")
+	}
 	if providerOf(peekModel(ba)) == "openai" || providerOf(peekModel(bb)) == "openai" {
 		var a, b OARequest
 		if json.Unmarshal(ba, &a) != nil || json.Unmarshal(bb, &b) != nil {
@@ -130,11 +159,12 @@ func diffBytes(ba, bb []byte) ([]Finding, error) {
 }
 
 func cmdCheck(args []string) int {
-	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	// ContinueOnError: a flag typo must exit 64 (usage error), not flag's
+	// default 2 — exit 2 is the documented "HIGH finding" CI contract.
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	exact := fs.Bool("exact", false,
 		"exact Anthropic token counts via the free count_tokens API (needs ANTHROPIC_API_KEY; two metadata calls, nothing billed, key never stored). OpenAI counts are always exact (embedded o200k tokenizer).")
-	fs.Parse(args)
-	if fs.NArg() != 1 {
+	if fs.Parse(args) != nil || fs.NArg() != 1 {
 		usage()
 	}
 	path := fs.Arg(0)

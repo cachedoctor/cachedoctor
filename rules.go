@@ -75,9 +75,26 @@ func firstDiff(a, b string) string {
 	if start < 0 {
 		start = 0
 	}
-	return fmt.Sprintf("first divergence at byte %d:\n      A: …%s\n      B: …%s\n         %s^", i,
-		clip(safe(a, start, i+30), 60), clip(safe(b, start, i+30), 60),
-		strings.Repeat(" ", min(i-start, 60)))
+	ell := "…"
+	if start == 0 {
+		ell = ""
+	}
+	// Caret alignment counts runes of the printed prefix, not bytes (still
+	// approximate for double-width CJK glyphs).
+	pre := strings.ReplaceAll(safe(a, start, i), "\n", "⏎")
+	pad := min(utf8.RuneCountInString(ell)+utf8.RuneCountInString(pre), 60)
+	return fmt.Sprintf("first divergence at byte %d:\n      A: %s%s\n      B: %s%s\n         %s^", i,
+		ell, clip(safe(a, start, i+30), 60), ell, clip(safe(b, start, i+30), 60),
+		strings.Repeat(" ", pad))
+}
+
+// runeFloor moves i left to the nearest rune boundary so byte slicing never
+// splits a multi-byte character into invalid UTF-8.
+func runeFloor(s string, i int) int {
+	for i > 0 && i < len(s) && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
 }
 
 func safe(s string, lo, hi int) string {
@@ -87,7 +104,7 @@ func safe(s string, lo, hi int) string {
 	if hi > len(s) {
 		hi = len(s)
 	}
-	return s[lo:hi]
+	return s[runeFloor(s, lo):runeFloor(s, hi)]
 }
 
 func clip(s string, n int) string {
@@ -95,7 +112,7 @@ func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return s[:runeFloor(s, n)] + "…"
 }
 
 func sameSet(a, b []string) bool {

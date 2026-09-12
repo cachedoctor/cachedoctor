@@ -57,7 +57,7 @@ func anthropicPrefixExact(key, baseURL string, doc map[string]any) (int, error) 
 	base := map[string]any{"model": doc["model"], "messages": messages}
 	full := map[string]any{"model": doc["model"], "messages": messages}
 	for _, k := range []string{"system", "tools"} {
-		if v, ok := doc[k]; ok {
+		if v, ok := doc[k]; ok && v != nil { // "system": null must not reach the API
 			full[k] = v
 		}
 	}

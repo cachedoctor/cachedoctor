@@ -8,6 +8,7 @@ package main
 // there's a stable leading system prefix at all.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -19,6 +20,11 @@ type OARequest struct {
 	Tools         json.RawMessage  `json:"tools"`
 	Stream        bool             `json:"stream"`
 	StreamOptions *OAStreamOptions `json:"stream_options"`
+	// Responses API shape: instructions is the system-equivalent, input is
+	// a string or a message-item array. Without these, a Responses body
+	// parsed as all-empty and diff returned a wrong "byte-identical" OK.
+	Instructions string          `json:"instructions"`
+	Input        json.RawMessage `json:"input"`
 }
 
 type OAStreamOptions struct {
@@ -26,6 +32,9 @@ type OAStreamOptions struct {
 }
 
 func (r *OARequest) reportsUsage() bool {
+	if len(r.Input) > 0 || r.Instructions != "" {
+		return true // Responses API streams always include usage
+	}
 	return !r.Stream || (r.StreamOptions != nil && r.StreamOptions.IncludeUsage)
 }
 
@@ -34,19 +43,23 @@ type OAMsg struct {
 	Content json.RawMessage `json:"content"`
 }
 
-func (m OAMsg) text() string {
-	if len(m.Content) == 0 {
+func (m OAMsg) text() string { return contentText(m.Content) }
+
+// contentText flattens a content value (string OR part array with text
+// fields — both Chat Completions and Responses parts carry "text").
+func contentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
 		return ""
 	}
-	if m.Content[0] == '"' {
+	if raw[0] == '"' {
 		var s string
-		json.Unmarshal(m.Content, &s)
+		json.Unmarshal(raw, &s)
 		return s
 	}
 	var parts []struct {
 		Text string `json:"text"`
 	}
-	json.Unmarshal(m.Content, &parts)
+	json.Unmarshal(raw, &parts)
 	var sb strings.Builder
 	for _, p := range parts {
 		sb.WriteString(p.Text)
@@ -54,11 +67,32 @@ func (m OAMsg) text() string {
 	return sb.String()
 }
 
-// prefixText is the intended-stable prefix OpenAI would cache: tools + system.
+// inputItems returns Responses-API input as messages; a bare string input
+// becomes one user message.
+func (r *OARequest) inputItems() []OAMsg {
+	if len(r.Input) == 0 {
+		return nil
+	}
+	if r.Input[0] == '"' {
+		return []OAMsg{{Role: "user", Content: r.Input}}
+	}
+	var items []OAMsg
+	json.Unmarshal(r.Input, &items)
+	return items
+}
+
+// prefixText is the intended-stable prefix OpenAI would cache: tools +
+// instructions + system/developer content (from messages or Responses input).
 func (r *OARequest) prefixText() string {
 	var sb strings.Builder
 	sb.Write(r.Tools)
+	sb.WriteString(r.Instructions)
 	for _, m := range r.Messages {
+		if m.Role == "system" || m.Role == "developer" {
+			sb.WriteString(m.text())
+		}
+	}
+	for _, m := range r.inputItems() {
 		if m.Role == "system" || m.Role == "developer" {
 			sb.WriteString(m.text())
 		}
@@ -69,15 +103,27 @@ func (r *OARequest) prefixText() string {
 func (r *OARequest) promptText() string {
 	var sb strings.Builder
 	sb.Write(r.Tools)
+	sb.WriteString(r.Instructions)
 	for _, m := range r.Messages {
+		sb.WriteString(m.text())
+	}
+	for _, m := range r.inputItems() {
 		sb.WriteString(m.text())
 	}
 	return sb.String()
 }
 
 func (r *OARequest) hasSystemFirst() bool {
-	return len(r.Messages) > 0 &&
-		(r.Messages[0].Role == "system" || r.Messages[0].Role == "developer")
+	if r.Instructions != "" {
+		return true
+	}
+	if len(r.Messages) > 0 {
+		return r.Messages[0].Role == "system" || r.Messages[0].Role == "developer"
+	}
+	if items := r.inputItems(); len(items) > 0 {
+		return items[0].Role == "system" || items[0].Role == "developer"
+	}
+	return false
 }
 
 func checkOpenAI(r *OARequest) []Finding {
@@ -130,8 +176,10 @@ func checkOpenAI(r *OARequest) []Finding {
 // streamed OpenAI response reports token usage. The body comes back unchanged
 // if it isn't a streaming request, already reports usage, or can't be parsed.
 func injectIncludeUsage(body []byte) []byte {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber() // preserve large integers (seeds, ids) exactly on re-marshal
 	var m map[string]any
-	if json.Unmarshal(body, &m) != nil {
+	if dec.Decode(&m) != nil {
 		return body
 	}
 	if stream, _ := m["stream"].(bool); !stream {

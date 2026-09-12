@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -50,8 +51,36 @@ func TestCheckFixtures(t *testing.T) {
 }
 
 func TestCheckBytesInvalidJSON(t *testing.T) {
-	if _, err := checkBytes([]byte("{nope")); err == nil {
-		t.Error("want error for invalid JSON")
+	// Malformed JSON, and well-formed JSON that isn't a request object —
+	// null/arrays/strings unmarshal into the structs as no-ops and used to
+	// get a diagnostic verdict instead of an error.
+	for _, in := range []string{"{nope", "null", "[1,2,3]", `"hello"`, "42", "  \n null"} {
+		if _, err := checkBytes([]byte(in)); err == nil {
+			t.Errorf("checkBytes(%q): want error, got verdict", in)
+		}
+	}
+	if _, err := diffBytes([]byte("null"), []byte("{}")); err == nil {
+		t.Error("diffBytes(null, {}): want error")
+	}
+}
+
+func TestReadLineCapped(t *testing.T) {
+	// An oversized line is skipped (nil, nil) and reading continues — a
+	// bufio.Scanner would stop dead and silently drop the rest of the file.
+	big := strings.Repeat("x", 100)
+	input := "line1\n" + big + "\nline3"
+	br := bufio.NewReaderSize(strings.NewReader(input), 16)
+	l1, err := readLineCapped(br, 50)
+	if err != nil || strings.TrimSpace(string(l1)) != "line1" {
+		t.Fatalf("line1: %q err=%v", l1, err)
+	}
+	skip, err := readLineCapped(br, 50)
+	if skip != nil || err != nil {
+		t.Fatalf("oversized: want (nil,nil), got %q err=%v", skip, err)
+	}
+	l3, err := readLineCapped(br, 50)
+	if string(l3) != "line3" || err != io.EOF {
+		t.Fatalf("line3: %q err=%v", l3, err)
 	}
 }
 
@@ -204,6 +233,95 @@ func TestExtractUsageOpenAI(t *testing.T) {
 	u := extractUsage(m)
 	if u.in != 400 || u.cacheRead != 600 || u.out != 40 {
 		t.Errorf("got %+v", u)
+	}
+}
+
+func TestExtractUsageWriteOnly(t *testing.T) {
+	// Write-without-read traffic (the "paying the premium for nothing"
+	// pathology) must survive extraction — it used to be silently dropped
+	// by analyze's usable-record filter.
+	m := map[string]any{
+		"model": "claude-sonnet-5",
+		"usage": map[string]any{"input_tokens": float64(0), "cache_creation_input_tokens": float64(5000)},
+	}
+	if u := extractUsage(m); u.cacheWrite != 5000 {
+		t.Errorf("got %+v", u)
+	}
+}
+
+func TestExtractUsageResponsesAPI(t *testing.T) {
+	// Responses API: input_tokens INCLUDES the cached portion, and cached
+	// lives under input_tokens_details.
+	m := map[string]any{
+		"model": "gpt-5.6-luna",
+		"usage": map[string]any{
+			"input_tokens":         float64(10000),
+			"output_tokens":        float64(50),
+			"input_tokens_details": map[string]any{"cached_tokens": float64(9000)},
+		},
+	}
+	u := extractUsage(m)
+	if u.in != 1000 || u.cacheRead != 9000 {
+		t.Errorf("responses usage: got in=%v read=%v, want 1000/9000", u.in, u.cacheRead)
+	}
+	// double nesting: response.usage.{...}
+	m2 := map[string]any{
+		"model":    "gpt-4o",
+		"response": map[string]any{"usage": map[string]any{"prompt_tokens": float64(700), "completion_tokens": float64(9)}},
+	}
+	if u := extractUsage(m2); u.in != 700 || u.out != 9 {
+		t.Errorf("response.usage nesting: got %+v", u)
+	}
+}
+
+func TestEpochSeconds(t *testing.T) {
+	sec := 1.7570000e9
+	for _, v := range []float64{sec, sec * 1e3, sec * 1e6, sec * 1e9} {
+		if got := epochSeconds(v); got != sec {
+			t.Errorf("epochSeconds(%v) = %v, want %v", v, got, sec)
+		}
+	}
+}
+
+func TestRateForGuards(t *testing.T) {
+	// substring lookalikes and open-weights models must not be priced
+	for _, m := range []string{"llama-3.1-sonnetto", "gpt-oss-120b", "groq/gpt-oss-120b", "gemini-2.5-flash"} {
+		if _, _, _, ok := rateFor(m); ok {
+			t.Errorf("rateFor(%q): priced, want unsupported", m)
+		}
+	}
+	// mini families keep their own (much cheaper) tier
+	if in, _, _, ok := rateFor("o1-mini-2024-09-12"); !ok || in > 5 {
+		t.Errorf("o1-mini fallback: in=%v ok=%v, want its own cheap tier", in, ok)
+	}
+}
+
+func TestResponsesAPIBodies(t *testing.T) {
+	a := []byte(`{"model":"gpt-5.6-luna","stream":true,"instructions":"stable system text","input":"question one"}`)
+	b := []byte(`{"model":"gpt-5.6-luna","stream":true,"instructions":"DRIFTED system text","input":"question one"}`)
+	// diff must see the instructions drift (used to return a wrong OK)
+	fs, err := diffBytes(a, b)
+	if err != nil || !hasSev(fs, "HIGH") {
+		t.Errorf("responses diff: want HIGH, got %+v err=%v", fs, err)
+	}
+	// volatile content in instructions must be caught by check
+	v := []byte(`{"model":"gpt-4o","instructions":"Today is 2026-09-13. Be helpful.","input":"hi"}`)
+	fs, _ = checkBytes(v)
+	if !hasSev(fs, "HIGH") {
+		t.Errorf("responses volatile: want HIGH, got %+v", fs)
+	}
+	// streaming Responses bodies always report usage — no WARN
+	fs, _ = checkBytes(a)
+	for _, f := range fs {
+		if strings.Contains(f.Title, "usage reporting") {
+			t.Errorf("responses stream: bogus usage-reporting WARN")
+		}
+	}
+}
+
+func TestProviderOfPrefixed(t *testing.T) {
+	if got := providerOf("azure/o1-mini"); got != "openai" {
+		t.Errorf("azure/o1-mini routed to %q", got)
 	}
 }
 

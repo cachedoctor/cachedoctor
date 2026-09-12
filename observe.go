@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type observer struct {
@@ -32,8 +33,15 @@ type observer struct {
 	n            int
 	byModel      map[string]*agg
 	findings     map[string]int
-	lastPfx      map[string]string // provider -> previous cacheable-prefix repr
+	// seenPfx tracks recently seen cacheable-prefix representations per
+	// provider|model. Drift is flagged when a *new* prefix appears where
+	// others already exist — a prefix seen before never re-flags, so two
+	// apps (or interleaved request kinds) sharing the proxy don't produce
+	// a spurious HIGH on every request.
+	seenPfx map[string]map[string]bool
 }
+
+const seenPfxCap = 16 // per provider|model; beyond this, drift detection resets
 
 func cmdObserve(args []string) int {
 	fs := flag.NewFlagSet("observe", flag.ExitOnError)
@@ -49,15 +57,21 @@ func cmdObserve(args []string) int {
 		client:       &http.Client{},
 		byModel:      map[string]*agg{},
 		findings:     map[string]int{},
-		lastPfx:      map[string]string{},
+		seenPfx:      map[string]map[string]bool{},
 	}
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *port), Handler: o}
 
+	// On signal: stop accepting, wait (bounded) for in-flight requests so
+	// their observations land, then let cmdObserve print the summary.
+	done := make(chan struct{})
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-stop
-		srv.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+		close(done)
 	}()
 
 	mode := "read-only"
@@ -72,16 +86,20 @@ func cmdObserve(args []string) int {
 		fmt.Fprintln(os.Stderr, "cachedoctor:", err)
 		return 1
 	}
+	<-done // in-flight requests finish (bounded) before the summary
 	o.summary()
 	return 0
 }
 
 func (o *observer) route(path string) (provider, base string) {
 	switch {
+	// OpenAI paths first: /v1/threads/*/messages (Assistants) contains
+	// "messages" but is not Anthropic traffic.
+	case strings.Contains(path, "chat/completions"), strings.Contains(path, "responses"),
+		strings.Contains(path, "/threads/"):
+		provider, base = "openai", "https://api.openai.com"
 	case strings.Contains(path, "messages"):
 		provider, base = "anthropic", "https://api.anthropic.com"
-	case strings.Contains(path, "chat/completions"), strings.Contains(path, "responses"):
-		provider, base = "openai", "https://api.openai.com"
 	}
 	if o.upstream != "" {
 		base = o.upstream
@@ -90,8 +108,18 @@ func (o *observer) route(path string) (provider, base string) {
 }
 
 func (o *observer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	r.Body.Close()
+	if err != nil {
+		http.Error(w, "cachedoctor: reading request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxBodyBytes {
+		// Refuse rather than silently forward a truncated body the upstream
+		// would reject with a baffling parse error.
+		http.Error(w, fmt.Sprintf("cachedoctor: request body exceeds %dMB", maxBodyBytes>>20), http.StatusRequestEntityTooLarge)
+		return
+	}
 	prov, base := o.route(r.URL.Path)
 	if base == "" {
 		http.Error(w, "cachedoctor: can't route this path (expected an Anthropic or OpenAI endpoint)", http.StatusBadGateway)
@@ -99,10 +127,12 @@ func (o *observer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The one deliberate write: opt-in usage reporting for OpenAI streams.
-	// Diagnosis below still runs on the original body — we report what the
-	// app sends, not what we forwarded.
+	// Chat Completions only — the Responses API has no stream_options and
+	// 400s on it (its streams always report usage anyway). Diagnosis below
+	// still runs on the original body — we report what the app sends, not
+	// what we forwarded.
 	upstreamBody := body
-	if o.includeUsage && prov == "openai" {
+	if o.includeUsage && prov == "openai" && strings.Contains(r.URL.Path, "chat/completions") {
 		upstreamBody = injectIncludeUsage(body)
 	}
 
@@ -110,7 +140,10 @@ func (o *observer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
-	out, err := http.NewRequest(r.Method, target, bytes.NewReader(upstreamBody))
+	// The client's context cancels the upstream call when the client hangs
+	// up — otherwise an abandoned SSE stream is drained to EOF (a goroutine
+	// and connection leak, and a Shutdown that never returns).
+	out, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(upstreamBody))
 	if err != nil {
 		http.Error(w, "cachedoctor: "+err.Error(), http.StatusBadGateway)
 		return
@@ -206,13 +239,19 @@ func hopByHop(h string) bool {
 	return false
 }
 
+// maxBodyBytes caps proxied request bodies (the providers' own limit is
+// smaller); oversized requests get a clear 413 instead of silent truncation.
+const maxBodyBytes = 32 << 20
+
 func flushCopy(w http.ResponseWriter, r io.Reader) {
 	fl, _ := w.(http.Flusher)
 	b := make([]byte, 32*1024)
 	for {
 		n, err := r.Read(b)
 		if n > 0 {
-			w.Write(b[:n])
+			if _, werr := w.Write(b[:n]); werr != nil {
+				return // client gone; stop draining the upstream
+			}
 			if fl != nil {
 				fl.Flush()
 			}
@@ -240,19 +279,34 @@ func (o *observer) observe(prov, path string, status int, reqBody, respBody []by
 			pfx = prefixRepr(&req)
 		}
 	case "openai":
-		var oa OARequest
-		if json.Unmarshal(reqBody, &oa) == nil {
-			model = oa.Model
-			findings = filterSev(checkOpenAI(&oa))
-			pfx = oa.prefixText()
+		if strings.Contains(path, "chat/completions") {
+			var oa OARequest
+			if json.Unmarshal(reqBody, &oa) == nil {
+				model = oa.Model
+				findings = filterSev(checkOpenAI(&oa))
+				pfx = oa.prefixText()
+			}
+		} else {
+			// Responses API: different shape (input, not messages) and its
+			// streams always report usage — meter it, don't misdiagnose it.
+			model = peekModel(reqBody)
 		}
 	}
 	if pfx != "" {
-		if last, ok := o.lastPfx[prov]; ok && last != pfx {
-			findings = append([]Finding{{Sev: "HIGH",
-				Title: "Cacheable prefix changed since the previous call"}}, findings...)
+		key := prov + "|" + model
+		seen := o.seenPfx[key]
+		if seen == nil {
+			seen = map[string]bool{}
+			o.seenPfx[key] = seen
 		}
-		o.lastPfx[prov] = pfx
+		if !seen[pfx] && len(seen) > 0 {
+			findings = append([]Finding{{Sev: "HIGH",
+				Title: "New cacheable prefix (drifted from previous calls?)"}}, findings...)
+		}
+		if len(seen) >= seenPfxCap {
+			clear(seen)
+		}
+		seen[pfx] = true
 	}
 
 	u := extractUsageBytes(respBody, model)
