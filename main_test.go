@@ -154,6 +154,12 @@ func TestRateFor(t *testing.T) {
 	if in, _, _, ok := rateFor("gpt-7-preview"); !ok || in != 1.25 {
 		t.Errorf("gpt family fallback: got in=%v ok=%v, want gpt-5 rates (1.25)", in, ok)
 	}
+	if in, _, _, ok := rateFor("claude-opus-6-internal"); !ok || in != 5.0 {
+		t.Errorf("opus family fallback: got in=%v ok=%v, want claude-opus-5 rates (5.0)", in, ok)
+	}
+	if in, read, _, ok := rateFor("claude-fable-6"); !ok || in != 10.0 || read != 0.25 {
+		t.Errorf("fable family fallback: got in=%v read=%v ok=%v, want claude-fable-5-1 rates (10.0/0.25)", in, read, ok)
+	}
 	// unsupported provider
 	if _, _, _, ok := rateFor("gemini-2.5-pro"); ok {
 		t.Error("gemini should not be priced")

@@ -30,7 +30,9 @@ var dateSuffix = regexp.MustCompile(`(-\d{8}|-\d{4}-\d{2}-\d{2}|-latest|-v\d+:\d
 // family's NEWEST priced entry — revisit after scripts/update-pricing.sh
 // refreshes the snapshot, or unknown names get priced a generation stale.
 var familyRep = []struct{ token, key string }{
-	{"opus", "claude-opus-4-8"},
+	{"fable", "claude-fable-5-1"},
+	{"mythos", "claude-mythos-5-1"},
+	{"opus", "claude-opus-5"},
 	{"sonnet", "claude-sonnet-5"},
 	{"haiku", "claude-haiku-4-5"},
 	{"gpt-4o-mini", "gpt-4o-mini"},
