@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -167,6 +168,9 @@ func cmdAnalyze(path string) int {
 	}
 	fmt.Printf("\n  (cost from LiteLLM model prices; recoverable = lifting the hit rate to\n")
 	fmt.Printf("   %.0f%% — tokens that move from full price to cache-read price)\n\n", targetHit*100)
+	if monthly(tRecover) >= 0.01 {
+		fmt.Printf("  %s\n\n", strings.ReplaceAll(funnelLine(), "\n", "\n  "))
+	}
 	return 0
 }
 

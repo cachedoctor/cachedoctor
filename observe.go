@@ -363,5 +363,6 @@ func (o *observer) summary() {
 		for _, x := range list {
 			fmt.Printf("  ×%d  %s\n", x.c, x.t)
 		}
+		fmt.Printf("\n%s\n", funnelLine())
 	}
 }

@@ -12,6 +12,18 @@ type Finding struct {
 
 var sevIcon = map[string]string{"HIGH": "🔴", "WARN": "🟡", "INFO": "⚪", "OK": "🟢"}
 
+// funnelURL is where the "want it fixed automatically?" footer points.
+// cachedoctor diagnoses; cachedoctord (the paid proxy by the same team)
+// fixes in-flight. Swap for a product page when one exists.
+const funnelURL = "https://github.com/cachedoctor"
+
+// funnelLine is the single tasteful footer printed where a money number
+// appears (analyze, observe summary) — never on check/diff, and only when
+// something is actually recoverable.
+func funnelLine() string {
+	return "cachedoctord (same team) plugs these leaks automatically — cache injection,\nkeep-warm, request normalization → " + funnelURL
+}
+
 // report prints findings and returns the exit code: 2 if any HIGH, else 0.
 func report(title string, f []Finding) int {
 	fmt.Printf("cachedoctor · %s\n\n", title)

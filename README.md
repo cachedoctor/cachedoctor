@@ -180,9 +180,21 @@ apply — but **prefix instability, prefix ordering, and minimum size do**, and
 Costs come from **[LiteLLM's model price table](https://github.com/BerriAI/litellm)**
 (Anthropic + OpenAI), embedded in the binary; refresh with `scripts/update-pricing.sh`.
 
+## When you want it fixed, not just found
+
+cachedoctor is **read-only by design** — it tells you what's leaking and what it
+costs, and never rewrites your requests. When you want the leaks closed
+automatically, **cachedoctord** — the proxy from the same team — fixes them
+in-flight: `cache_control` injection, request normalization (byte-identity),
+TTL right-sizing + keep-warm, and fan-out serialization, with an A/B savings
+report that proves the delta on your own traffic. Early access:
+[github.com/cachedoctor](https://github.com/cachedoctor).
+
 ## Status
 
-MVP: `observe`, `check`, `diff`, `analyze` — Anthropic + OpenAI, prices from LiteLLM.
+`observe`, `check`, `diff`, `analyze` — Anthropic + OpenAI, prices from LiteLLM.
+On the roadmap: `probe` (opt-in BYOK two-call measurement — the empirical
+"confirm the fix landed" step).
 
 ## Contributing
 
