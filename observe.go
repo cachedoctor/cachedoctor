@@ -124,10 +124,61 @@ func (o *observer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	var buf bytes.Buffer
+	var buf capture
 	flushCopy(w, io.TeeReader(resp.Body, &buf))
 
 	o.observe(prov, r.URL.Path, resp.StatusCode, body, buf.Bytes())
+}
+
+// captureLimit is how many bytes capture retains from each end of a response.
+// The usage fields extractUsageBytes scans for live in small frames at the
+// stream's edges (Anthropic: message_start / final message_delta; OpenAI: the
+// last chunk), so the middle of a long stream is never needed.
+const captureLimit = 64 << 10
+
+// capture is an io.Writer that keeps the head and tail of a stream, bounding
+// memory for arbitrarily long responses.
+type capture struct {
+	head, tail []byte
+	truncated  bool
+}
+
+func (c *capture) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := captureLimit - len(c.head); room > 0 {
+		take := min(room, len(p))
+		c.head = append(c.head, p[:take]...)
+		p = p[take:]
+	}
+	if len(p) == 0 {
+		return n, nil
+	}
+	c.truncated = true
+	if c.tail == nil {
+		c.tail = make([]byte, 0, captureLimit)
+	}
+	if len(p) >= captureLimit {
+		c.tail = append(c.tail[:0], p[len(p)-captureLimit:]...)
+	} else if len(c.tail)+len(p) <= captureLimit {
+		c.tail = append(c.tail, p...)
+	} else {
+		keep := captureLimit - len(p)
+		copy(c.tail, c.tail[len(c.tail)-keep:])
+		c.tail = append(c.tail[:keep], p...)
+	}
+	return n, nil
+}
+
+// Bytes returns the retained head and tail, joined by a NUL so a regex can
+// never match across the elided middle.
+func (c *capture) Bytes() []byte {
+	if !c.truncated {
+		return c.head
+	}
+	out := make([]byte, 0, len(c.head)+1+len(c.tail))
+	out = append(out, c.head...)
+	out = append(out, 0)
+	return append(out, c.tail...)
 }
 
 func hopByHop(h string) bool {

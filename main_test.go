@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,6 +195,51 @@ data: {"usage":{"output_tokens":33}}
 	u := extractUsageBytes(body, "claude-sonnet-4-5")
 	if u.in != 10 || u.cacheRead != 1200 || u.out != 33 {
 		t.Errorf("got %+v", u)
+	}
+}
+
+func TestCaptureBounded(t *testing.T) {
+	var c capture
+	head := []byte(`data: {"usage":{"input_tokens":10,"cache_read_input_tokens":1200}}` + "\n")
+	c.Write(head)
+	filler := bytes.Repeat([]byte("data: {\"delta\":{\"text\":\"x\"}}\n"), 1)
+	for written := 0; written < 5*captureLimit; written += len(filler) {
+		c.Write(filler)
+	}
+	c.Write([]byte(`data: {"usage":{"output_tokens":33}}` + "\n"))
+
+	got := c.Bytes()
+	if len(got) > 2*captureLimit+1 {
+		t.Errorf("capture retained %d bytes, want <= %d", len(got), 2*captureLimit+1)
+	}
+	u := extractUsageBytes(got, "claude-sonnet-4-5")
+	if u.in != 10 || u.cacheRead != 1200 || u.out != 33 {
+		t.Errorf("usage from truncated stream: got %+v", u)
+	}
+}
+
+func TestCaptureSmallStreamIntact(t *testing.T) {
+	var c capture
+	in := []byte("hello, small stream")
+	for _, b := range in { // worst case: one byte per Write
+		c.Write([]byte{b})
+	}
+	if got := c.Bytes(); !bytes.Equal(got, in) {
+		t.Errorf("got %q, want %q", got, in)
+	}
+}
+
+func TestCaptureNoSeamMatch(t *testing.T) {
+	// A usage key split across the elided middle must not produce a bogus
+	// match: the NUL separator keeps regexes from spanning the gap.
+	var c capture
+	c.Write(bytes.Repeat([]byte("x"), captureLimit-len(`"input_tokens":`)))
+	c.Write([]byte(`"input_tokens":`)) // head ends exactly with the key
+	c.Write([]byte("123"))             // tail begins with digits
+	c.Write(bytes.Repeat([]byte("y"), captureLimit-3))
+	u := extractUsageBytes(c.Bytes(), "claude-sonnet-4-5")
+	if u.in != 0 {
+		t.Errorf("seam produced a false match: in = %v, want 0", u.in)
 	}
 }
 
