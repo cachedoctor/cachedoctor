@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // volatile matches content that breaks byte-identity between calls when it
@@ -22,8 +24,39 @@ var volatile = []struct {
 	{"phrase like \"today is\"", regexp.MustCompile(`(?i)\b(today is|current (date|time)|as of|right now)\b`)},
 }
 
-// estTokens is a rough (chars/4) estimate — good enough to flag threshold risk.
-func estTokens(s string) int { return len(s) / 4 }
+// estTokens estimates tokens for content with no exact tokenizer available
+// (Anthropic's is unpublished; `check --exact` gets real counts from the
+// count_tokens API). Script-aware, calibrated against o200k measurements
+// (prose ≈5.2 bytes/token, symbol-heavy ≈3.3; CJK counted per rune:
+// Han ≈1.45 runes/token, kana ≈1.5, hangul ≈1.85). Divisors lean toward
+// under-counting: the failure mode is an extra borderline warning, never a
+// silently-missed below-minimum prefix.
+func estTokens(s string) int {
+	var han, kana, hangul float64
+	var latinBytes, proseBytes int
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			han++
+		case unicode.Is(unicode.Hiragana, r), unicode.Is(unicode.Katakana, r):
+			kana++
+		case unicode.Is(unicode.Hangul, r):
+			hangul++
+		default:
+			sz := utf8.RuneLen(r)
+			latinBytes += sz
+			if r == ' ' || unicode.IsLetter(r) {
+				proseBytes += sz
+			}
+		}
+	}
+	tok := han/1.45 + kana/1.5 + hangul/1.85
+	if latinBytes > 0 {
+		proseFrac := float64(proseBytes) / float64(latinBytes)
+		tok += float64(latinBytes) / (3.3 + 1.9*proseFrac)
+	}
+	return int(tok)
+}
 
 // firstDiff shows the first point where two strings diverge, with context.
 func firstDiff(a, b string) string {

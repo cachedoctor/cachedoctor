@@ -42,7 +42,7 @@ go build -o cachedoctor .     # or: go install github.com/cachedoctor/cachedocto
 
 ```sh
 cachedoctor observe                           # live proxy: diagnose real traffic (recommended)
-cachedoctor check <request.json>              # scan one request for anti-patterns
+cachedoctor check [--exact] <request.json>    # scan one request for anti-patterns
 cachedoctor diff  <callA.json> <callB.json>   # show what broke byte-identity
 cachedoctor analyze <logs.jsonl>              # real hit rate + $/mo recoverable
 ```
@@ -176,6 +176,17 @@ apply — but **prefix instability, prefix ordering, and minimum size do**, and
   stream, so nothing downstream can see your hit rate). `observe` flags it; pass
   `--include-usage` to have the proxy inject it for you — the one deliberate
   exception to read-only.
+
+**Token counts.** OpenAI counts are **exact**: the binary embeds a
+stdlib-only implementation of the `o200k_base` tokenizer (gpt-4o, o1/o3/o4 and
+later), validated token-for-token against reference tiktoken. Anthropic's
+tokenizer is unpublished, so Anthropic counts use a **script-aware calibrated
+estimate** (prose, code/JSON, and CJK — Chinese, Japanese, Korean — each at
+empirically measured rates, tuned to under-count so a below-minimum warning is
+never silently missed) — or run `check --exact` with `ANTHROPIC_API_KEY` set
+to get exact counts from the free `count_tokens` endpoint (two metadata calls,
+nothing billed, the key is never stored). Dollar figures never depend on any
+of this: they come from the provider's own usage fields.
 
 Costs come from **[LiteLLM's model price table](https://github.com/BerriAI/litellm)**
 (Anthropic + OpenAI), embedded in the binary; refresh with `scripts/update-pricing.sh`.

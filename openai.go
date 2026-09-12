@@ -87,12 +87,14 @@ func checkOpenAI(r *OARequest) []Finding {
 	if strings.TrimSpace(prefix) == "" {
 		prefix = prompt
 	}
-	tok := estTokens(prompt)
+	// Exact o200k BPE, not an estimate (framing tokens add a little on top,
+	// so this can only under-count — a below-minimum warning is never missed).
+	tok := countTokensO200k(prompt)
 
 	if tok < 1024 {
 		f = append(f, Finding{"WARN",
 			"Prompt below OpenAI's cache minimum",
-			fmt.Sprintf("The prompt is ~%d tokens; OpenAI only auto-caches prompts of 1024+ tokens, so none of it is cached.", tok),
+			fmt.Sprintf("The prompt is %d tokens (o200k count); OpenAI only auto-caches prompts of 1024+ tokens, so none of it is cached.", tok),
 			"Caching engages automatically once your stable prefix crosses ~1024 tokens."})
 	}
 	for _, v := range volatile {

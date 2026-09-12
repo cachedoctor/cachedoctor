@@ -16,6 +16,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -28,10 +29,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "check":
-		if len(os.Args) != 3 {
-			usage()
-		}
-		os.Exit(cmdCheck(os.Args[2]))
+		os.Exit(cmdCheck(os.Args[2:]))
 	case "diff":
 		if len(os.Args) != 4 {
 			usage()
@@ -56,12 +54,15 @@ func usage() {
 	fmt.Fprint(os.Stderr, `cachedoctor — why your LLM prompt cache isn't saving you money
 
 usage:
-  cachedoctor check <request.json>              scan one Anthropic request for cache anti-patterns
+  cachedoctor check [--exact] <request.json>    scan one Anthropic request for cache anti-patterns
   cachedoctor diff  <callA.json> <callB.json>   show what broke byte-identity between two calls
   cachedoctor analyze <logs.jsonl>              real hit rate + $/mo recoverable from a usage log
   cachedoctor observe [--port N] [--upstream URL]  live proxy: diagnose real traffic as it flows
 
 Any path may be "-" to read from stdin (e.g. cat req.json | cachedoctor check -).
+Token counts: OpenAI is exact (embedded o200k tokenizer); Anthropic is a
+calibrated estimate, or exact with --exact + ANTHROPIC_API_KEY (two free
+count_tokens metadata calls — nothing is billed, the key is never stored).
 check exits 2 if any high-severity issue is found (useful in CI).
 Anthropic and OpenAI are supported; other providers in a log are skipped.
 `)
@@ -128,11 +129,30 @@ func diffBytes(ba, bb []byte) ([]Finding, error) {
 	return diff(&a, &b), nil
 }
 
-func cmdCheck(path string) int {
+func cmdCheck(args []string) int {
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	exact := fs.Bool("exact", false,
+		"exact Anthropic token counts via the free count_tokens API (needs ANTHROPIC_API_KEY; two metadata calls, nothing billed, key never stored). OpenAI counts are always exact (embedded o200k tokenizer).")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		usage()
+	}
+	path := fs.Arg(0)
 	b, err := readInput(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cachedoctor:", err)
 		return 1
+	}
+	if *exact && providerOf(peekModel(b)) == "anthropic" {
+		key := os.Getenv("ANTHROPIC_API_KEY")
+		if key == "" {
+			fmt.Fprintln(os.Stderr, "cachedoctor: --exact needs ANTHROPIC_API_KEY (used for two free count_tokens calls, never stored)")
+			return 1
+		}
+		if err := enableAnthropicExact(key, b); err != nil {
+			fmt.Fprintf(os.Stderr, "cachedoctor: %s: %v\n", path, err)
+			return 1
+		}
 	}
 	findings, err := checkBytes(b)
 	if err != nil {

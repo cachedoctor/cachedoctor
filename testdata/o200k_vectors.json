@@ -1,0 +1,118 @@
+[
+ {
+  "text": "",
+  "tokens": 0
+ },
+ {
+  "text": "hello world",
+  "tokens": 2
+ },
+ {
+  "text": "Hello, World!",
+  "tokens": 4
+ },
+ {
+  "text": "hello",
+  "tokens": 1
+ },
+ {
+  "text": " hello",
+  "tokens": 1
+ },
+ {
+  "text": "  hello",
+  "tokens": 2
+ },
+ {
+  "text": "hello ",
+  "tokens": 2
+ },
+ {
+  "text": "The quick brown fox jumps over the lazy dog.",
+  "tokens": 10
+ },
+ {
+  "text": "don't can't won't it's I'll we've they're he'd",
+  "tokens": 8
+ },
+ {
+  "text": "DON'T SHOUT'S",
+  "tokens": 5
+ },
+ {
+  "text": "CamelCaseIdentifier snake_case_name kebab-case-name",
+  "tokens": 10
+ },
+ {
+  "text": "1 22 333 4444 55555 1234567890",
+  "tokens": 16
+ },
+ {
+  "text": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"system\",\"content\":\"You are helpful.\"}],\"temperature\":0.7}",
+  "tokens": 30
+ },
+ {
+  "text": "def fib(n):\n    return n if n < 2 else fib(n-1) + fib(n-2)\n",
+  "tokens": 24
+ },
+ {
+  "text": "SELECT * FROM users WHERE id = 42;",
+  "tokens": 10
+ },
+ {
+  "text": "https://example.com/path?q=1&x=%20y#frag",
+  "tokens": 15
+ },
+ {
+  "text": "line one\nline two\r\nline three\n\n\nline four",
+  "tokens": 11
+ },
+ {
+  "text": "   \n  \t \n\n mixed   whitespace   runs ",
+  "tokens": 9
+ },
+ {
+  "text": "café naïve résumé Zürich",
+  "tokens": 6
+ },
+ {
+  "text": "日本語のテキストです。中文文本。한국어 텍스트.",
+  "tokens": 17
+ },
+ {
+  "text": "🩺💰 emoji test 👍🏽 family 👨‍👩‍👧‍👦",
+  "tokens": 22
+ },
+ {
+  "text": "Ω≈ç√∫˜µ≤≥÷ mathematical ∑∏πσ",
+  "tokens": 18
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "tokens": 63
+ },
+ {
+  "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+  "tokens": 301
+ },
+ {
+  "text": "a1b2c3 999x 12345abc",
+  "tokens": 13
+ },
+ {
+  "text": "tool_use: {'name': 'search_code', 'input_schema': {'type': 'object'}}",
+  "tokens": 20
+ },
+ {
+  "text": "    indented code block\n        deeper indent\n",
+  "tokens": 10
+ },
+ {
+  "text": "trailing spaces   \nand more  ",
+  "tokens": 7
+ },
+ {
+  "text": "'s 't 're alone at start",
+  "tokens": 8
+ }
+]

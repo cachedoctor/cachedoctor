@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -328,6 +332,66 @@ func TestHitPct(t *testing.T) {
 	}
 	if got := hitPct(0, 0, 0); got != 0 {
 		t.Errorf("empty hitPct = %v, want 0", got)
+	}
+}
+
+// TestEstTokensCalibrated checks the script-aware estimator against o200k
+// reference counts (Anthropic's tokenizer is unpublished; o200k magnitudes
+// are the proxy). Band: never more than ~10% over the reference (over-counting
+// can hide a below-minimum prefix), never less than 65% of it.
+func TestEstTokensCalibrated(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		ref  int // o200k reference count
+	}{
+		{"prose", strings.Repeat("The quick brown fox jumps over the lazy dog and keeps running through the quiet forest. ", 10), 171},
+		{"json", strings.Repeat(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`, 10), 190},
+		{"traditional-zh", strings.Repeat("提示詞快取可以大幅降低大型語言模型的輸入成本，但它會靜默失效。", 10), 250},
+		{"simplified-zh", strings.Repeat("提示词缓存可以大幅降低大模型的输入成本，但它会静默失效。", 10), 200},
+		{"korean", strings.Repeat("프롬프트 캐시는 입력 비용을 크게 줄일 수 있습니다.", 10), 150},
+	}
+	for _, c := range cases {
+		got := estTokens(c.text)
+		lo, hi := int(0.65*float64(c.ref)), int(1.10*float64(c.ref))
+		if got < lo || got > hi {
+			t.Errorf("%s: estTokens = %d, want within [%d, %d] (ref %d)", c.name, got, lo, hi, c.ref)
+		}
+	}
+}
+
+func TestAnthropicPrefixExact(t *testing.T) {
+	// The mock returns a larger count when the payload carries system/tools;
+	// the prefix is the difference of the two calls.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages/count_tokens" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("x-api-key") != "sk-test" {
+			t.Error("missing api key header")
+		}
+		body, _ := io.ReadAll(r.Body)
+		n := 300
+		if bytes.Contains(body, []byte(`"system"`)) {
+			n = 1500
+		}
+		fmt.Fprintf(w, `{"input_tokens":%d}`, n)
+	}))
+	defer srv.Close()
+
+	doc := map[string]any{
+		"model":    "claude-sonnet-4-5",
+		"system":   "big stable prompt",
+		"messages": []any{map[string]any{"role": "user", "content": "q"}},
+	}
+	n, err := anthropicPrefixExact("sk-test", srv.URL, doc)
+	if err != nil || n != 1200 {
+		t.Errorf("got n=%d err=%v, want 1200", n, err)
+	}
+	// No prefix at all: zero without any API call.
+	n, err = anthropicPrefixExact("sk-test", "http://invalid.invalid", map[string]any{"model": "claude-x"})
+	if err != nil || n != 0 {
+		t.Errorf("prefixless: got n=%d err=%v, want 0", n, err)
 	}
 }
 

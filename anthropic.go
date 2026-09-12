@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 )
@@ -139,13 +140,21 @@ func check(r *Request) []Finding {
 	bp := r.breakpoints()
 	prefix := r.toolsText() + r.systemText()
 	prefixTok := estTokens(prefix)
+	approx := "~" // estimate marker; dropped when count_tokens gives exact numbers
+	if anthropicExactCount != nil {
+		if n, err := anthropicExactCount(); err == nil {
+			prefixTok, approx = n, ""
+		} else {
+			fmt.Fprintf(os.Stderr, "cachedoctor: count_tokens failed (%v); falling back to the estimate\n", err)
+		}
+	}
 
 	// R1 — no caching at all
 	if bp == 0 {
 		if prefixTok >= 500 {
 			f = append(f, Finding{"HIGH",
 				"No prompt caching enabled",
-				fmt.Sprintf("There is no cache_control anywhere, but your tools+system prefix is ~%d tokens of stable, reusable content — currently billed at full price on every call.", prefixTok),
+				fmt.Sprintf("There is no cache_control anywhere, but your tools+system prefix is %s%d tokens of stable, reusable content — currently billed at full price on every call.", approx, prefixTok),
 				"Add cache_control (ephemeral, ttl:\"1h\") to the last tool and/or the end of the system prompt."})
 		} else {
 			f = append(f, Finding{"INFO",
@@ -165,7 +174,7 @@ func check(r *Request) []Finding {
 		if prefixTok < r.minPrefixTokens() {
 			f = append(f, Finding{"WARN",
 				"Cached prefix may be below the minimum",
-				fmt.Sprintf("The cacheable prefix is ~%d tokens; below ~%d, cache_control is silently ignored for this model.", prefixTok, r.minPrefixTokens()),
+				fmt.Sprintf("The cacheable prefix is %s%d tokens; below ~%d, cache_control is silently ignored for this model.", approx, prefixTok, r.minPrefixTokens()),
 				"Cache a longer stable prefix, or accept that caching won't engage here."})
 		}
 		// R2 — default 5-minute TTL
