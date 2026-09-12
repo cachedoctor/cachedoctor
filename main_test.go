@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,6 +196,65 @@ data: {"usage":{"output_tokens":33}}
 	u := extractUsageBytes(body, "claude-sonnet-4-5")
 	if u.in != 10 || u.cacheRead != 1200 || u.out != 33 {
 		t.Errorf("got %+v", u)
+	}
+}
+
+func TestCheckOpenAIStreamUsageWarn(t *testing.T) {
+	warned := func(body string) bool {
+		fs, err := checkBytes([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range fs {
+			if strings.Contains(f.Title, "usage reporting") {
+				return true
+			}
+		}
+		return false
+	}
+	base := `"model":"gpt-4o","messages":[{"role":"system","content":"s"}]`
+	if !warned(`{` + base + `,"stream":true}`) {
+		t.Error("streaming without include_usage: want WARN")
+	}
+	if warned(`{` + base + `,"stream":true,"stream_options":{"include_usage":true}}`) {
+		t.Error("include_usage set: want no WARN")
+	}
+	if warned(`{` + base + `}`) {
+		t.Error("non-streaming: want no WARN")
+	}
+}
+
+func TestInjectIncludeUsage(t *testing.T) {
+	parse := func(b []byte) *OARequest {
+		var r OARequest
+		if err := json.Unmarshal(b, &r); err != nil {
+			t.Fatal(err)
+		}
+		return &r
+	}
+	// injected for a bare streaming request, other fields preserved
+	out := injectIncludeUsage([]byte(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	r := parse(out)
+	if !r.reportsUsage() || r.Model != "gpt-4o" || len(r.Messages) != 1 {
+		t.Errorf("got %s", out)
+	}
+	// merged into existing stream_options without clobbering it
+	out = injectIncludeUsage([]byte(`{"stream":true,"stream_options":{"other":1}}`))
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	so := m["stream_options"].(map[string]any)
+	if so["include_usage"] != true || so["other"] != float64(1) {
+		t.Errorf("got %s", out)
+	}
+	// untouched: non-streaming, already set, invalid JSON
+	for _, in := range []string{
+		`{"model":"gpt-4o"}`,
+		`{"stream":true,"stream_options":{"include_usage":true}}`,
+		`{nope`,
+	} {
+		if got := injectIncludeUsage([]byte(in)); string(got) != in {
+			t.Errorf("want unchanged, got %s from %s", got, in)
+		}
 	}
 }
 

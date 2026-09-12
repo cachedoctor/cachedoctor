@@ -25,27 +25,31 @@ import (
 )
 
 type observer struct {
-	upstream string
-	client   *http.Client
-	mu       sync.Mutex
-	n        int
-	byModel  map[string]*agg
-	findings map[string]int
-	lastPfx  map[string]string // provider -> previous cacheable-prefix repr
+	upstream     string
+	includeUsage bool // inject stream_options.include_usage into OpenAI streams
+	client       *http.Client
+	mu           sync.Mutex
+	n            int
+	byModel      map[string]*agg
+	findings     map[string]int
+	lastPfx      map[string]string // provider -> previous cacheable-prefix repr
 }
 
 func cmdObserve(args []string) int {
 	fs := flag.NewFlagSet("observe", flag.ExitOnError)
 	port := fs.Int("port", 7070, "local port to listen on")
 	upstream := fs.String("upstream", "", "force one upstream base URL (else route by path)")
+	includeUsage := fs.Bool("include-usage", false,
+		"set stream_options.include_usage on OpenAI streaming requests so usage is measurable (the one deliberate exception to read-only; clients see the extra usage chunk)")
 	fs.Parse(args)
 
 	o := &observer{
-		upstream: strings.TrimRight(*upstream, "/"),
-		client:   &http.Client{},
-		byModel:  map[string]*agg{},
-		findings: map[string]int{},
-		lastPfx:  map[string]string{},
+		upstream:     strings.TrimRight(*upstream, "/"),
+		includeUsage: *includeUsage,
+		client:       &http.Client{},
+		byModel:      map[string]*agg{},
+		findings:     map[string]int{},
+		lastPfx:      map[string]string{},
 	}
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *port), Handler: o}
 
@@ -56,7 +60,11 @@ func cmdObserve(args []string) int {
 		srv.Shutdown(context.Background())
 	}()
 
-	fmt.Printf("cachedoctor observing on http://localhost:%d  (read-only; Ctrl-C for summary)\n", *port)
+	mode := "read-only"
+	if o.includeUsage {
+		mode = "read-only + include_usage injection for OpenAI streams"
+	}
+	fmt.Printf("cachedoctor observing on http://localhost:%d  (%s; Ctrl-C for summary)\n", *port, mode)
 	fmt.Printf("point your SDK at it:\n")
 	fmt.Printf("  export ANTHROPIC_BASE_URL=http://localhost:%d\n", *port)
 	fmt.Printf("  export OPENAI_BASE_URL=http://localhost:%d/v1\n\n", *port)
@@ -90,11 +98,19 @@ func (o *observer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The one deliberate write: opt-in usage reporting for OpenAI streams.
+	// Diagnosis below still runs on the original body — we report what the
+	// app sends, not what we forwarded.
+	upstreamBody := body
+	if o.includeUsage && prov == "openai" {
+		upstreamBody = injectIncludeUsage(body)
+	}
+
 	target := base + r.URL.Path
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
-	out, err := http.NewRequest(r.Method, target, bytes.NewReader(body))
+	out, err := http.NewRequest(r.Method, target, bytes.NewReader(upstreamBody))
 	if err != nil {
 		http.Error(w, "cachedoctor: "+err.Error(), http.StatusBadGateway)
 		return

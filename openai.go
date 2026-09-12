@@ -14,9 +14,19 @@ import (
 )
 
 type OARequest struct {
-	Model    string          `json:"model"`
-	Messages []OAMsg         `json:"messages"`
-	Tools    json.RawMessage `json:"tools"`
+	Model         string           `json:"model"`
+	Messages      []OAMsg          `json:"messages"`
+	Tools         json.RawMessage  `json:"tools"`
+	Stream        bool             `json:"stream"`
+	StreamOptions *OAStreamOptions `json:"stream_options"`
+}
+
+type OAStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+func (r *OARequest) reportsUsage() bool {
+	return !r.Stream || (r.StreamOptions != nil && r.StreamOptions.IncludeUsage)
 }
 
 type OAMsg struct {
@@ -94,6 +104,12 @@ func checkOpenAI(r *OARequest) []Finding {
 			break
 		}
 	}
+	if !r.reportsUsage() {
+		f = append(f, Finding{"WARN",
+			"Streaming without usage reporting",
+			"This request streams but doesn't set stream_options.include_usage, so OpenAI omits token usage from the stream — your logs (and cachedoctor) can't see whether the cache is hitting.",
+			"Add \"stream_options\": {\"include_usage\": true}, or run observe with --include-usage to inject it."})
+	}
 	if tok >= 1024 && !r.hasSystemFirst() {
 		f = append(f, Finding{"WARN",
 			"No stable leading system prefix",
@@ -106,6 +122,33 @@ func checkOpenAI(r *OARequest) []Finding {
 			"Cache-friendly for OpenAI: a stable, 1024+ token prefix with no volatile content — OpenAI caches it automatically.", ""})
 	}
 	return f
+}
+
+// injectIncludeUsage returns body with stream_options.include_usage set, so a
+// streamed OpenAI response reports token usage. The body comes back unchanged
+// if it isn't a streaming request, already reports usage, or can't be parsed.
+func injectIncludeUsage(body []byte) []byte {
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil {
+		return body
+	}
+	if stream, _ := m["stream"].(bool); !stream {
+		return body
+	}
+	so, _ := m["stream_options"].(map[string]any)
+	if iu, _ := so["include_usage"].(bool); iu {
+		return body
+	}
+	if so == nil {
+		so = map[string]any{}
+	}
+	so["include_usage"] = true
+	m["stream_options"] = so
+	out, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func diffOpenAI(a, b *OARequest) []Finding {

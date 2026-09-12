@@ -147,6 +147,10 @@ apply — but **prefix instability, prefix ordering, and minimum size do**, and
 - Prompt below the 1024-token minimum (not cached at all)
 - No stable leading system prefix (cacheable prefix starts at your variable turn)
 - `diff` / `observe`: prefix drift between calls
+- Streaming without `stream_options.include_usage` (OpenAI omits usage from the
+  stream, so nothing downstream can see your hit rate). `observe` flags it; pass
+  `--include-usage` to have the proxy inject it for you — the one deliberate
+  exception to read-only.
 
 Costs come from **[LiteLLM's model price table](https://github.com/BerriAI/litellm)**
 (Anthropic + OpenAI), embedded in the binary; refresh with `scripts/update-pricing.sh`.
