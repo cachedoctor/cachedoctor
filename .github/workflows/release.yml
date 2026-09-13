@@ -1,7 +1,9 @@
 name: release
 on:
   push:
-    tags: ["v*"]
+    # Full semver only — the moving major-alias tag (v1), used for the
+    # Action reference, can be re-pointed without cutting a duplicate release.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 # GoReleaser needs to create/replace the GitHub release and upload assets.
 permissions:
