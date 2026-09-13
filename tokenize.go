@@ -77,6 +77,10 @@ const wsClass = `\t-\r \x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{2
 // two whitespace alternatives (`\s+(?!\S)` needs lookahead, which RE2 lacks;
 // pretokens emulates it below). Anchored: Go regexp preserves alternation
 // order, matching the reference leftmost-first semantics.
+//
+// Known drift: Go's Unicode tables can lag the reference's (measured: ±1
+// token on a handful of Unicode-16 scripts under Go 1.24's Unicode 15
+// tables). Self-heals with toolchain updates; direction is over-count.
 var o200kMain = regexp.MustCompile(`^(?:` +
 	`[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?` +
 	`|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?` +

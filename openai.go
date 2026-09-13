@@ -84,20 +84,24 @@ func (r *OARequest) inputItems() []OAMsg {
 }
 
 // prefixText is the intended-stable prefix OpenAI would cache: tools +
-// instructions + system/developer content (from messages or Responses input).
+// instructions + the LEADING run of system/developer content. A system
+// message appearing after variable user turns is not part of the stable
+// leading prefix and must not be credited to it.
 func (r *OARequest) prefixText() string {
 	var sb strings.Builder
 	sb.Write(r.Tools)
 	sb.WriteString(r.Instructions)
 	for _, m := range r.Messages {
-		if m.Role == "system" || m.Role == "developer" {
-			sb.WriteString(m.text())
+		if m.Role != "system" && m.Role != "developer" {
+			break
 		}
+		sb.WriteString(m.text())
 	}
 	for _, m := range r.inputItems() {
-		if m.Role == "system" || m.Role == "developer" {
-			sb.WriteString(m.text())
+		if m.Role != "system" && m.Role != "developer" {
+			break
 		}
+		sb.WriteString(m.text())
 	}
 	return sb.String()
 }
@@ -214,5 +218,5 @@ func diffOpenAI(a, b *OARequest) []Finding {
 	}
 	return []Finding{{"OK",
 		"Cacheable prefix is byte-identical",
-		"The stable prefix (tools + system) matches between the two calls — OpenAI should cache it.", ""}}
+		"The stable leading prefix (tools + instructions + leading system) matches between the two calls — OpenAI should cache it. (Conversation-history divergence is not compared; for multi-turn traffic the history itself is part of OpenAI's cache.)", ""}}
 }
