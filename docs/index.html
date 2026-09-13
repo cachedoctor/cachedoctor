@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cachedoctor — find out why your LLM prompt cache isn't saving you money</title>
+<meta name="description" content="A zero-dependency CLI and proxy that diagnoses silent prompt-cache failures on Anthropic and OpenAI — and tells you what they cost you.">
+<link rel="canonical" href="https://cachedoctor.dev/">
+<meta property="og:title" content="cachedoctor">
+<meta property="og:description" content="Find out why your LLM prompt cache isn't saving you money.">
+<meta property="og:url" content="https://cachedoctor.dev/">
+<meta property="og:image" content="https://cachedoctor.dev/avatar.png">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="2" y="14" width="60" height="36" rx="10" fill="%234ADE80"/><polyline points="10,32 22,32 27,25 33,39 38,20 44,42 48,32 54,32" fill="none" stroke="%23062B1F" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>'>
+<style>
+  :root {
+    --bg: #080F1E; --bg2: #0E1B30; --panel: #0C1729;
+    --line: #1E3350; --dim: #1B2C4A; --dim-line: #33507A;
+    --teal: #14B8A6; --teal-hi: #2DD4BF; --green: #4ADE80;
+    --text: #E6EDF5; --muted: #8FA3C0; --red: #F87171; --amber: #FBBF24;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: linear-gradient(160deg, var(--bg2), var(--bg) 55%);
+    color: var(--text);
+    font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--teal-hi); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 19px; color: var(--text); }
+  .brand:hover { text-decoration: none; }
+  .mark { width: 34px; height: 22px; border-radius: 7px; background: var(--green); position: relative; flex: none; }
+  .mark svg { position: absolute; inset: 0; }
+  nav .links { display: flex; gap: 22px; font-size: 15px; }
+  nav .links a { color: var(--muted); }
+  nav .links a:hover { color: var(--text); }
+
+  header { padding: 64px 0 40px; }
+  .grid-vis { display: flex; flex-direction: column; gap: 8px; margin-bottom: 44px; }
+  .grid-vis .row { display: flex; gap: 8px; }
+  .tok { height: 16px; border-radius: 5px; background: var(--teal); opacity: .85; box-shadow: 0 0 14px rgba(45,212,191,.25); }
+  .tok.off { background: var(--dim); border: 1px solid var(--dim-line); opacity: 1; box-shadow: none; }
+  .tok.hit { background: var(--green); opacity: 1; box-shadow: 0 0 18px rgba(74,222,128,.5); position: relative; }
+  h1 { font-size: clamp(30px, 5.2vw, 46px); line-height: 1.15; letter-spacing: -.5px; max-width: 780px; }
+  h1 em { font-style: normal; color: var(--green); }
+  .sub { color: var(--muted); font-size: 19px; max-width: 700px; margin: 18px 0 30px; }
+  .cta-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .install {
+    font-family: var(--mono); font-size: 14.5px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px 18px; color: var(--text);
+  }
+  .install b { color: var(--green); font-weight: 500; }
+  .btn {
+    display: inline-block; background: var(--green); color: #06251F; font-weight: 650;
+    padding: 12px 22px; border-radius: 10px; font-size: 15.5px;
+  }
+  .btn:hover { text-decoration: none; filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--dim-line); }
+
+  section { padding: 44px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 27px; letter-spacing: -.3px; margin-bottom: 8px; }
+  .lede { color: var(--muted); max-width: 720px; margin-bottom: 28px; }
+
+  .term {
+    background: #071120; border: 1px solid var(--line); border-radius: 12px;
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.7; overflow-x: auto;
+  }
+  .term .bar { display: flex; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  .term .bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--dim-line); }
+  .term pre { padding: 16px 18px; white-space: pre; }
+  .term .c { color: #5C7699; } .term .g { color: var(--green); } .term .t { color: var(--teal-hi); }
+  .term .r { color: var(--red); } .term .y { color: var(--amber); } .term .p { color: var(--muted); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 28px 0; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
+  .stat .n { font-size: 30px; font-weight: 750; color: var(--green); letter-spacing: -.5px; }
+  .stat .d { color: var(--muted); font-size: 14.5px; margin-top: 6px; }
+
+  .cmds { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .cmd { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; }
+  .cmd code.name { font-family: var(--mono); color: var(--green); font-size: 15px; }
+  .cmd p { color: var(--muted); font-size: 14.5px; margin-top: 8px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .4px; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  td:last-child { color: var(--muted); }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+  .tablewrap table { min-width: 560px; }
+  tr:last-child td { border-bottom: none; }
+
+  ul.why { list-style: none; display: grid; gap: 14px; max-width: 780px; }
+  ul.why li { padding-left: 30px; position: relative; color: var(--muted); }
+  ul.why li b { color: var(--text); }
+  ul.why li::before { content: "＋"; position: absolute; left: 0; top: 0; color: var(--green); font-weight: 700; }
+
+  footer { border-top: 1px solid var(--line); padding: 34px 0 50px; color: var(--muted); font-size: 14.5px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  @media (max-width: 640px) { .sub { font-size: 17px; } section { padding: 36px 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <a class="brand" href="/">
+    <span class="mark"><svg viewBox="0 0 64 40"><polyline points="8,20 20,20 25,13 31,27 36,8 42,30 46,20 56,20" fill="none" stroke="#062B1F" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    cachedoctor
+  </a>
+  <div class="links">
+    <a href="#observe">Observe</a>
+    <a href="#commands">Commands</a>
+    <a href="#ci">CI</a>
+    <a href="https://github.com/cachedoctor/cachedoctor">GitHub</a>
+  </div>
+</nav>
+
+<header>
+  <div class="grid-vis" aria-hidden="true">
+    <div class="row"><span class="tok" style="flex:2"></span><span class="tok" style="flex:3"></span><span class="tok" style="flex:1.4"></span><span class="tok" style="flex:3.4"></span><span class="tok" style="flex:2.2"></span><span class="tok" style="flex:2"></span></div>
+    <div class="row"><span class="tok" style="flex:2.6"></span><span class="tok" style="flex:1.8"></span><span class="tok" style="flex:3.2"></span><span class="tok hit" style="flex:2"></span><span class="tok off" style="flex:2.4"></span><span class="tok off" style="flex:1.6"></span></div>
+    <div class="row"><span class="tok off" style="flex:2.1"></span><span class="tok off" style="flex:3"></span><span class="tok off" style="flex:1.6"></span><span class="tok off" style="flex:2.6"></span><span class="tok off" style="flex:2.3"></span><span class="tok off" style="flex:1.9"></span></div>
+  </div>
+  <h1>Find out why your LLM prompt cache <em>isn't saving you money</em>.</h1>
+  <p class="sub">Prompt caching cuts input cost up to ~90% — but it fails <b>silently</b>. A broken cache still returns correct responses; you just quietly pay full price. cachedoctor tells you whether your cache is working, <b>why</b> it isn't, and how much it's costing you.</p>
+  <div class="cta-row">
+    <a class="btn" href="https://github.com/cachedoctor/cachedoctor">Get it on GitHub</a>
+    <span class="install"><b>$</b> go install github.com/cachedoctor/cachedoctor@latest</span>
+  </div>
+</header>
+
+<section id="observe">
+  <h2>Point your app at it. See the leak.</h2>
+  <p class="lede">Run <code>observe</code> as a local pass-through proxy and set your SDK's base URL to it. Requests are forwarded <b>unchanged</b> — read-only, any language, key never stored — and every call gets a live diagnosis.</p>
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i></div>
+    <pre><span class="g">$</span> cachedoctor observe
+<span class="g">$</span> export ANTHROPIC_BASE_URL=http://localhost:7070   <span class="c"># or OPENAI_BASE_URL</span>
+<span class="g">$</span> python your_app.py
+
+<span class="r">🔴</span> #1 anthropic /v1/messages → 200 · hit 0%  · <span class="r">No prompt caching enabled</span>
+<span class="r">🔴</span> #2 anthropic /v1/messages → 200 · hit 0%  · <span class="r">New cacheable prefix (drifted?)</span>
+<span class="p">── session summary ──</span>
+2 requests · hit rate <span class="r">0%</span> · spent ~$0.42 · recoverable <span class="g">~$18.30</span> (this session)</pre>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">~90%</div><div class="d">input-cost discount a working cache earns on the stable prefix — the largest share of most production bills.</div></div>
+    <div class="stat"><div class="n">$3,000 → $300</div><div class="d">per day, for a support bot resending a 10k-token system-plus-tools prefix on 100k calls (Sonnet rates). One stray timestamp keeps you at $3,000.</div></div>
+    <div class="stat"><div class="n">0 errors</div><div class="d">a broken cache throws. The response is still correct — the only symptom is the invoice.</div></div>
+  </div>
+</section>
+
+<section id="commands">
+  <h2>Four commands</h2>
+  <p class="lede">One static Go binary. No Python environment, no LLM calls, no telemetry — deterministic rules, runnable air-gapped against logs you already have.</p>
+  <div class="cmds">
+    <div class="cmd"><code class="name">cachedoctor observe</code><p>Live proxy: diagnose real traffic as it flows. Anti-patterns, prefix drift between calls, running hit rate, dollars recoverable.</p></div>
+    <div class="cmd"><code class="name">cachedoctor check req.json</code><p>Scan one request body for cache anti-patterns — volatile values in the prefix, missing or misplaced breakpoints, below-minimum prefixes, models with no caching at all.</p></div>
+    <div class="cmd"><code class="name">cachedoctor diff a.json b.json</code><p>Two consecutive calls that should have hit the cache but didn't? See the exact byte where the prefix identity broke.</p></div>
+    <div class="cmd"><code class="name">cachedoctor analyze usage.jsonl</code><p>Point it at response logs you already collect: real hit rate and $/month recoverable, priced per model.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>What silently kills a cache</h2>
+  <p class="lede">Caching applies wherever the same tokens lead the prompt on consecutive calls — in most production apps that's 80–95% of every request. Every row below has a way to silently break byte-identity.</p>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Use case</th><th>What silently kills the cache</th></tr>
+      <tr><td>Support / chat bots</td><td>a timestamp in the system prompt</td></tr>
+      <tr><td>Coding agents, IDE assistants</td><td>prefix drift between call types</td></tr>
+      <tr><td>Document Q&amp;A</td><td>re-serializing the doc per question</td></tr>
+      <tr><td>RAG</td><td>shuffled retrieval order</td></tr>
+      <tr><td>LLM-as-judge / evals</td><td>rebuilt few-shot example order</td></tr>
+      <tr><td>Multi-agent fan-out</td><td>tools serialized from an unordered map — random per worker</td></tr>
+      <tr><td>Scheduled batch jobs</td><td>call cadence longer than the TTL: all writes, no reads</td></tr>
+      <tr><td>Voice / real-time agents</td><td>per-utterance session metadata up top</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="ci">
+  <h2>Gate pull requests on cache regressions</h2>
+  <p class="lede"><code>check</code> and <code>diff</code> exit <code>2</code> on a high-severity issue — a strict exit-code contract (0 clean · 1 unreadable input · 2 finding · 64 usage error), so a flag typo can never masquerade as a passing build. There's a ready-made GitHub Action that checks saved request bodies, diffs them against the base branch, and comments the impact on the PR.</p>
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i></div>
+    <pre><span class="g">$</span> cat req.json | cachedoctor check -
+
+<span class="r">🔴 HIGH</span> — Volatile content in the cached prefix
+    Your prompt prefix contains a volatile value (timestamp: <span class="y">"2026-09-14T07:12:03Z"</span>).
+    The provider caches the longest byte-identical prefix, so anything that changes
+    near the front means the cache never engages — silently.
+    <span class="t">fix:</span> Move changing values toward the end; keep system and tools byte-stable.
+
+<span class="g">$</span> echo $?
+<span class="r">2</span></pre>
+  </div>
+</section>
+
+<section>
+  <h2>Why cachedoctor</h2>
+  <ul class="why">
+    <li><b>Deterministic, not another LLM.</b> The diagnosis engine is rules and exact tokenization — same input, same verdict, no API cost to run it.</li>
+    <li><b>Exact token counts.</b> Embedded o200k tokenizer for OpenAI; Anthropic exact counts via the free count_tokens API with <code>--exact</code>. Errors are engineered to only ever over-warn — a below-minimum prefix is never silently missed.</li>
+    <li><b>Dollars, not just findings.</b> Every verdict is priced against a per-model rate table (refreshed weekly), so "the cache is broken" comes with "and it's costing ~$18k/month".</li>
+    <li><b>Anthropic and OpenAI.</b> Explicit <code>cache_control</code> breakpoints and automatic prefix caching are different failure surfaces — both are covered, including models that predate caching entirely.</li>
+    <li><b>Byte-level answers.</b> <code>diff</code> doesn't say "your prefix changed" — it shows the first diverging byte, with context.</li>
+  </ul>
+</section>
+
+<footer>
+  <span>Apache-2.0 · <a href="https://github.com/cachedoctor/cachedoctor">github.com/cachedoctor/cachedoctor</a></span>
+  <span>cachedoctor.dev</span>
+</footer>
+
+</div>
+</body>
+</html>
