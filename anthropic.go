@@ -52,6 +52,20 @@ type Block struct {
 // under-counted agent transcripts ~1000x and false-WARNed below-minimum.
 func (b Block) flatText() string {
 	var sb strings.Builder
+	b.appendFlat(&sb, 0)
+	return sb.String()
+}
+
+// appendFlat is flatText's bounded worker. The depth cap and the scan-cap
+// early-out keep pathological nesting linear: naive recursion re-unmarshals
+// each level's RawMessage (which contains the whole remaining chain), an
+// O(depth²) blowup measured at ~15s of CPU per MB — a DoS through observe
+// and CI-gate fixtures. Real tool_result nesting is 1-2 levels; past
+// tokenScanCap the token verdict can't change anyway.
+func (b Block) appendFlat(sb *strings.Builder, depth int) {
+	if depth > 20 || sb.Len() > tokenScanCap {
+		return
+	}
 	sb.WriteString(b.Text)
 	if len(b.Content) > 0 {
 		if b.Content[0] == '"' {
@@ -62,14 +76,13 @@ func (b Block) flatText() string {
 			var nested []Block
 			json.Unmarshal(b.Content, &nested)
 			for _, n := range nested {
-				sb.WriteString(n.flatText())
+				n.appendFlat(sb, depth+1)
 			}
 		}
 	}
 	if len(b.Input) > 0 {
 		sb.Write(b.Input)
 	}
-	return sb.String()
 }
 
 // systemText flattens `system` (string or block array) to its text.

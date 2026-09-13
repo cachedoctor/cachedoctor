@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func hasSev(fs []Finding, sev string) bool {
@@ -767,6 +768,23 @@ func TestToolTranscriptSpan(t *testing.T) {
 	}
 	if hasTitle(fs, "below the minimum") {
 		t.Errorf("tool_result content must count toward the span, got %+v", fs)
+	}
+}
+
+// TestFlatTextBounded: deep tool_result nesting must not go quadratic —
+// naive recursion cost ~15s/MB; a 175KB 5000-deep chain must be near-instant.
+func TestFlatTextBounded(t *testing.T) {
+	depth := 4900
+	body := strings.Repeat(`{"type":"tool_result","content":[`, depth) +
+		`{"type":"text","text":"x"}` + strings.Repeat(`]}`, depth)
+	var b Block
+	if err := json.Unmarshal([]byte(`{"type":"tool_result","content":[`+body+`]}`), &b); err != nil {
+		t.Skip("depth beyond json limits:", err)
+	}
+	start := time.Now()
+	b.flatText()
+	if el := time.Since(start); el > 500*time.Millisecond {
+		t.Errorf("deep nesting took %v — quadratic re-parse is back", el)
 	}
 }
 
