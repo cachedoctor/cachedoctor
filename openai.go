@@ -165,6 +165,25 @@ func (r *OARequest) hasSystemFirst() bool {
 	return false
 }
 
+// oaSupportsCaching reports whether the model has automatic prompt caching.
+// Caching shipped with gpt-4o; every OpenAI model since has it (all o200k).
+// Classic gpt-4 (incl. -turbo/-32k snapshots), gpt-3.5 ("gpt-35" on Azure),
+// and the completions-era models never got it. Unknown names pass — running
+// the normal rules is the status quo, and a false "can't cache" verdict is
+// worse than a borderline warning.
+func oaSupportsCaching(model string) bool {
+	m := strings.ToLower(model)
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:] // "azure/gpt-35-turbo" gates like "gpt-35-turbo"
+	}
+	if strings.Contains(m, "gpt-3.5") || strings.Contains(m, "gpt-35") ||
+		strings.Contains(m, "davinci") || strings.Contains(m, "babbage") {
+		return false
+	}
+	// "gpt-4" only at a name boundary: gpt-4o / gpt-4.1 / gpt-4.5 all cache.
+	return m != "gpt-4" && !strings.HasPrefix(m, "gpt-4-")
+}
+
 func checkOpenAI(r *OARequest) []Finding {
 	var f []Finding
 	prompt := r.promptText()
@@ -179,6 +198,19 @@ func checkOpenAI(r *OARequest) []Finding {
 	// so this can only under-count — a below-minimum warning is never
 	// missed). Capped: past 256KB the 1024 threshold is long since settled.
 	tok := countTokensCapped(prompt)
+
+	if !oaSupportsCaching(r.Model) {
+		// Every other finding below is advice for a cache this model doesn't
+		// have — prefix hygiene can't help, only a model upgrade can.
+		sev := "INFO"
+		if tok >= 1024 {
+			sev = "HIGH" // enough stable content to cache, billed in full forever
+		}
+		return []Finding{{sev,
+			"Model has no prompt caching",
+			fmt.Sprintf("%q predates OpenAI's automatic prompt caching (gpt-4o and later) — no prefix is ever cached, and this %d-token prompt is billed at full price on every call.", r.Model, tok),
+			"Move to gpt-4o or newer to make this prefix cacheable; prompt hygiene alone can't engage a cache here."}}
+	}
 
 	if tok < 1024 {
 		f = append(f, Finding{"WARN",

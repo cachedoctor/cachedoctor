@@ -380,6 +380,60 @@ data: {"usage":{"output_tokens":33}}
 	}
 }
 
+func TestModelCacheGate(t *testing.T) {
+	gated := func(body string) bool {
+		fs, err := checkBytes([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range fs {
+			if strings.Contains(f.Title, "no prompt caching") ||
+				strings.Contains(f.Title, "without prompt caching") {
+				return true
+			}
+		}
+		return false
+	}
+	oa := func(model string) string {
+		return `{"model":"` + model + `","messages":[{"role":"system","content":"s"}]}`
+	}
+	an := func(model, cc string) string {
+		return `{"model":"` + model + `","system":[{"type":"text","text":"s"` + cc + `}],"messages":[]}`
+	}
+
+	for _, m := range []string{"gpt-4", "gpt-4-turbo", "gpt-4-32k", "gpt-3.5-turbo", "azure/gpt-35-turbo"} {
+		if !gated(oa(m)) {
+			t.Errorf("%s: want cache-gate finding", m)
+		}
+	}
+	for _, m := range []string{"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.5-preview", "o3", "gpt-5"} {
+		if gated(oa(m)) {
+			t.Errorf("%s: caching model wrongly gated", m)
+		}
+	}
+
+	bp := `,"cache_control":{"type":"ephemeral"}`
+	for _, m := range []string{"claude-2.1", "claude-instant-1.2", "us.anthropic.claude-v2", "claude-3-sonnet-20240229"} {
+		if !gated(an(m, "")) || !gated(an(m, bp)) {
+			t.Errorf("%s: want cache-gate finding", m)
+		}
+	}
+	for _, m := range []string{"claude-3-5-sonnet-20241022", "claude-sonnet-4-5", "claude-3-opus-20240229", "claude-3-haiku-20240307", "claude-fable-5"} {
+		if gated(an(m, bp)) {
+			t.Errorf("%s: caching model wrongly gated", m)
+		}
+	}
+
+	// A breakpoint on a gated model is HIGH — someone thinks they're caching.
+	fs, err := checkBytes([]byte(an("claude-2.1", bp)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fs) != 1 || fs[0].Sev != "HIGH" {
+		t.Errorf("claude-2.1 with breakpoint: want single HIGH, got %+v", fs)
+	}
+}
+
 func TestCheckOpenAIStreamUsageWarn(t *testing.T) {
 	warned := func(body string) bool {
 		fs, err := checkBytes([]byte(body))

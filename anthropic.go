@@ -280,6 +280,25 @@ func (r *Request) minPrefixTokens() int {
 	}
 }
 
+// supportsCaching reports whether the model has prompt caching at all.
+// Caching exists on Claude 3.5+ plus Claude 3 Opus/Haiku; Claude 1/2/Instant
+// and Claude 3 Sonnet (the one Claude 3+ model left out) never got it.
+// Contains, not prefix: Bedrock ids wrap the name ("us.anthropic.claude-v2").
+// Unknown names pass — the normal rules are the status quo, and a false
+// "can't cache" verdict is worse than a borderline warning.
+func (r *Request) supportsCaching() bool {
+	m := strings.ToLower(r.Model)
+	for _, legacy := range []string{
+		"claude-instant", "claude-1", "claude-2", "claude-v1", "claude-v2",
+		"claude-3-sonnet",
+	} {
+		if strings.Contains(m, legacy) {
+			return false
+		}
+	}
+	return true
+}
+
 // prefixRepr fingerprints the regenerated-per-call prefix (full tool
 // definitions + system text), used by observe to detect drift between
 // consecutive calls. Tool bodies are included: a changed description or
@@ -295,6 +314,27 @@ func prefixRepr(r *Request) string {
 func check(r *Request) []Finding {
 	var f []Finding
 	bi := r.breakpointInfo()
+
+	if !r.supportsCaching() {
+		// Every rule below is advice for a cache this model doesn't have.
+		// Gate before the exact-count path too: no point spending count_tokens
+		// calls on a verdict that can't change.
+		if bi.n > 0 {
+			return []Finding{{"HIGH",
+				"cache_control on a model without prompt caching",
+				fmt.Sprintf("%q has no prompt caching (Claude 3.5+ and Claude 3 Opus/Haiku only) — its %d cache_control breakpoint(s) never create or read a cache; the full prompt is billed on every call.", r.Model, bi.n),
+				"Move to a current Claude model to make this prefix cacheable."}}
+		}
+		if tsTok := estTokens(r.toolsText() + r.systemText()); tsTok >= 500 {
+			return []Finding{{"HIGH",
+				"Model has no prompt caching",
+				fmt.Sprintf("%q has no prompt caching, and your tools+system prefix is ~%d tokens of stable content billed at full price on every call.", r.Model, tsTok),
+				"Move to a current Claude model to make this prefix cacheable."}}
+		}
+		return []Finding{{"INFO",
+			"Model has no prompt caching",
+			fmt.Sprintf("%q has no prompt caching. Your stable prefix is small, so little is lost yet — but caching needs a current Claude model.", r.Model), ""}}
+	}
 
 	// Exact tools+system token count when armed (check --exact).
 	tsTok := estTokens(r.toolsText() + r.systemText())
