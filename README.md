@@ -48,6 +48,8 @@ cachedoctor analyze <logs.jsonl>              # real hit rate + $/mo recoverable
 ```
 
 `check` and `diff` exit `2` on a high-severity issue — drop them in CI.
+(Full contract: `0` clean, `1` error/unreadable input, `2` high-severity
+finding, `64` usage error — a flag typo can never masquerade as a finding.)
 
 **stdin:** any file argument can be `-`, so you can pipe instead of writing files:
 
@@ -122,7 +124,13 @@ jobs:
 ```
 
 That turns "someone reordered the tools array and silently killed the cache" into
-a red check on the PR instead of a surprise on next month's bill.
+a red check on the PR instead of a surprise on next month's bill. The gate is
+**fail-closed**: a missing binary, an unparseable fixture, or an unresolvable
+base ref fails the build rather than passing silently. Action inputs:
+`fixtures` (glob), `base-ref`, and `version` (empty = build the action's own
+bundled source, so gate script and binary always match). The script also runs
+standalone via env vars: `CACHEDOCTOR_FIXTURES`, `CACHEDOCTOR_BASE`,
+`CACHEDOCTOR_BIN`, `CACHEDOCTOR_PR` + `GITHUB_TOKEN` (bash ≥ 4.4).
 
 ### `check` — catch the silent leak before you ship
 
@@ -175,15 +183,23 @@ apply — but **prefix instability, prefix ordering, and minimum size do**, and
 - Streaming without `stream_options.include_usage` (OpenAI omits usage from the
   stream, so nothing downstream can see your hit rate). `observe` flags it; pass
   `--include-usage` to have the proxy inject it for you — the one deliberate
-  exception to read-only.
+  exception to read-only. (Responses-API bodies — `instructions` / `input` —
+  are understood too, and are exempt: their streams always report usage.)
+
+Rules are **position-aware**: the cached span ends at the last `cache_control`
+breakpoint's block (render order tools → system → messages), so volatile
+content *below* the breakpoint — exactly where the fix text tells you to put
+it — never flags, and a conversation-level breakpoint counts the whole history
+(including tool results) toward the size minimum.
 
 **Token counts.** OpenAI counts are **exact**: the binary embeds a
 stdlib-only implementation of the `o200k_base` tokenizer (gpt-4o, o1/o3/o4 and
 later), validated token-for-token against reference tiktoken. Anthropic's
-tokenizer is unpublished, so Anthropic counts use a **script-aware calibrated
-estimate** (prose, code/JSON, and CJK — Chinese, Japanese, Korean — each at
-empirically measured rates, tuned to under-count so a below-minimum warning is
-never silently missed) — or run `check --exact` with `ANTHROPIC_API_KEY` set
+tokenizer is unpublished, so Anthropic counts use a **calibrated estimate**
+(the exact o200k count with a 10% safety discount — both are byte-level BPEs
+of similar density, and the discount keeps errors on the under-counting side,
+so a below-minimum warning is never silently missed) — or run `check --exact`
+with `ANTHROPIC_API_KEY` set
 to get exact counts from the free `count_tokens` endpoint (two metadata calls,
 nothing billed, the key is never stored). Dollar figures never depend on any
 of this: they come from the provider's own usage fields.
