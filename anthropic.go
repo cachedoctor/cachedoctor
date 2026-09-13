@@ -79,53 +79,119 @@ func (r *Request) systemBlocks() []Block {
 // position misdiagnose real bodies (e.g. a conversation-only breakpoint
 // caches tools+system+history, not "nothing").
 type bpInfo struct {
-	n                   int
-	tools, system, msgs int      // breakpoint count per region
-	ttls                []string // TTLs of every breakpoint ("" = 5m default)
-	lastIn              string   // "tools" | "system" | "messages" | ""
-	msgSpanText         string   // messages text up to the last message-region breakpoint
+	n        int
+	ttls     []string // TTLs of every breakpoint ("" = 5m default)
+	lastIn   string   // "tools" | "system" | "messages" | ""
+	spanText string   // flattened text of the span cached by the LAST breakpoint
+	volText  string   // regenerated-per-call portion of that span (volatile scan)
 }
 
 func (r *Request) breakpointInfo() bpInfo {
 	var bi bpInfo
-	for _, t := range r.Tools {
+	lastTool, lastSys, lastMsg := -1, -1, -1
+	for i, t := range r.Tools {
 		if t.CacheControl != nil {
-			bi.tools++
+			bi.n++
 			bi.ttls = append(bi.ttls, t.CacheControl.TTL)
-			bi.lastIn = "tools"
+			lastTool = i
 		}
 	}
-	for _, b := range r.systemBlocks() {
+	sysBlocks := r.systemBlocks()
+	for i, b := range sysBlocks {
 		if b.CacheControl != nil {
-			bi.system++
+			bi.n++
 			bi.ttls = append(bi.ttls, b.CacheControl.TTL)
-			bi.lastIn = "system"
+			lastSys = i
 		}
 	}
-	lastMsg := -1
 	for i, m := range r.Messages {
 		if len(m.Content) > 0 && m.Content[0] == '[' {
 			var blocks []Block
 			json.Unmarshal(m.Content, &blocks)
 			for _, b := range blocks {
 				if b.CacheControl != nil {
-					bi.msgs++
+					bi.n++
 					bi.ttls = append(bi.ttls, b.CacheControl.TTL)
-					bi.lastIn = "messages"
 					lastMsg = i
 				}
 			}
 		}
 	}
-	if lastMsg >= 0 {
-		var sb strings.Builder
-		for i := 0; i <= lastMsg; i++ {
-			sb.Write(r.Messages[i].Content)
-		}
-		bi.msgSpanText = sb.String()
+
+	// The span is cut at the breakpoint's BLOCK, not its region: a
+	// breakpoint on the first of two tools caches only that first tool.
+	switch {
+	case lastMsg >= 0:
+		bi.lastIn = "messages"
+		bi.volText = r.toolsTextUpTo(len(r.Tools)-1) + r.systemText()
+		bi.spanText = bi.volText + r.messagesTextUpTo(lastMsg)
+	case lastSys >= 0:
+		bi.lastIn = "system"
+		bi.volText = r.toolsTextUpTo(len(r.Tools)-1) + r.systemTextUpTo(lastSys)
+		bi.spanText = bi.volText
+	case lastTool >= 0:
+		bi.lastIn = "tools"
+		bi.volText = r.toolsTextUpTo(lastTool)
+		bi.spanText = bi.volText
 	}
-	bi.n = bi.tools + bi.system + bi.msgs
 	return bi
+}
+
+// toolsTextUpTo flattens tool definitions through index i (inclusive).
+func (r *Request) toolsTextUpTo(i int) string {
+	var sb strings.Builder
+	for j, t := range r.Tools {
+		if j > i {
+			break
+		}
+		sb.WriteString(t.Name)
+		sb.WriteString(t.Description)
+		sb.Write(t.InputSchema)
+	}
+	return sb.String()
+}
+
+// systemTextUpTo flattens system blocks through index i (inclusive); a
+// string system prompt is returned whole.
+func (r *Request) systemTextUpTo(i int) string {
+	if len(r.System) > 0 && r.System[0] == '"' {
+		return r.systemText()
+	}
+	var sb strings.Builder
+	for j, b := range r.systemBlocks() {
+		if j > i {
+			break
+		}
+		sb.WriteString(b.Text)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// messagesTextUpTo flattens message TEXT through message index i — raw JSON
+// would over-count the span ~10x (measured) and hide below-minimum warnings.
+func (r *Request) messagesTextUpTo(i int) string {
+	var sb strings.Builder
+	for j, m := range r.Messages {
+		if j > i {
+			break
+		}
+		if len(m.Content) == 0 {
+			continue
+		}
+		if m.Content[0] == '"' {
+			var s string
+			json.Unmarshal(m.Content, &s)
+			sb.WriteString(s)
+			continue
+		}
+		var blocks []Block
+		json.Unmarshal(m.Content, &blocks)
+		for _, b := range blocks {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
 }
 
 func (r *Request) breakpoints() int { return r.breakpointInfo().n }
@@ -190,22 +256,33 @@ func check(r *Request) []Finding {
 		}
 	}
 
-	// The cached span is everything up to the LAST breakpoint in render
-	// order (tools → system → messages). The volatile scan covers only the
-	// regenerated-per-call portion of that span — appended conversation
-	// history is byte-stable once written and would false-positive.
+	// The cached span is everything up to the LAST breakpoint's block in
+	// render order (tools → system → messages). The volatile scan covers
+	// only the regenerated-per-call portion of that span — appended
+	// conversation history is byte-stable once written and would
+	// false-positive.
 	spanTok, spanApprox := tsTok, tsApprox
 	volatileRegion := r.toolsText() + r.systemText()
 	spanName := "tools+system prefix"
-	switch bi.lastIn {
-	case "tools":
-		volatileRegion = r.toolsText()
-		spanTok, spanApprox = estTokens(volatileRegion), "~"
-		spanName = "tools prefix (the breakpoint is on a tool)"
-	case "messages":
-		spanTok = tsTok + estTokens(bi.msgSpanText)
-		spanApprox = "~" // conversation part is always estimated
-		spanName = "tools+system+conversation span (the breakpoint is on a message)"
+	if bi.lastIn != "" {
+		volatileRegion = bi.volText
+		spanTok, spanApprox = estTokens(bi.spanText), "~"
+		switch bi.lastIn {
+		case "tools":
+			spanName = "cached span (the breakpoint is on a tool)"
+		case "system":
+			spanName = "cached span (through the system breakpoint)"
+			// exact count covers full tools+system; only equivalent when the
+			// breakpoint is on the final system block
+			if tsApprox == "" && bi.spanText == r.toolsText()+r.systemText() {
+				spanTok, spanApprox = tsTok, ""
+			}
+		case "messages":
+			spanName = "tools+system+conversation span (the breakpoint is on a message)"
+			if tsApprox == "" { // exact tools+system + estimated conversation
+				spanTok = tsTok + estTokens(bi.spanText[len(bi.volText):])
+			}
+		}
 	}
 
 	// R1 — no caching at all
@@ -328,12 +405,14 @@ func diff(a, b *Request) []Finding {
 }
 
 // cacheSig is the ordered list of breakpoint positions and TTLs — the part
-// of the cache contract that byte-comparing content can't see.
+// of the cache contract that byte-comparing content can't see. Tool
+// breakpoints are keyed by tool NAME, not index, so a pure reorder doesn't
+// double-report on top of the "Tools reordered" finding.
 func cacheSig(r *Request) []string {
 	var sig []string
-	for i, t := range r.Tools {
+	for _, t := range r.Tools {
 		if t.CacheControl != nil {
-			sig = append(sig, fmt.Sprintf("tools[%d] ttl=%s", i, ttlName(t.CacheControl.TTL)))
+			sig = append(sig, fmt.Sprintf("tools[%s] ttl=%s", t.Name, ttlName(t.CacheControl.TTL)))
 		}
 	}
 	for i, b := range r.systemBlocks() {
@@ -355,9 +434,11 @@ func cacheSig(r *Request) []string {
 	return sig
 }
 
+// ttlName normalizes the TTL: an absent ttl and an explicit "5m" are the
+// same cache behavior and must not read as drift.
 func ttlName(ttl string) string {
 	if ttl == "" {
-		return "5m(default)"
+		return "5m"
 	}
 	return ttl
 }

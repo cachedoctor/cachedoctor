@@ -676,6 +676,85 @@ func TestBreakpointPositionAware(t *testing.T) {
 	}
 }
 
+// TestBlockLevelSpan locks in per-BLOCK (not per-region) span semantics.
+func TestBlockLevelSpan(t *testing.T) {
+	// Breakpoint on the FIRST of two tools: only that tiny tool is cached —
+	// the huge second tool must not inflate the span past the minimum.
+	big := strings.Repeat("stable schema text ", 400)
+	firstTool := []byte(`{"model":"claude-sonnet-4-5","tools":[` +
+		`{"name":"a","description":"tiny","cache_control":{"type":"ephemeral","ttl":"1h"}},` +
+		`{"name":"b","description":"` + big + `"}]}`)
+	fs, err := checkBytes(firstTool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasTitle(fs, "below the minimum") {
+		t.Errorf("first-tool breakpoint: tiny span must WARN below-minimum, got %+v", fs)
+	}
+	// Volatile date in the SECOND tool (below the breakpoint) must not flag.
+	volBelow := []byte(`{"model":"claude-sonnet-4-5","tools":[` +
+		`{"name":"a","description":"` + big + `","cache_control":{"type":"ephemeral","ttl":"1h"}},` +
+		`{"name":"b","description":"generated 2026-09-13"}]}`)
+	fs, err = checkBytes(volBelow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasTitle(fs, "Volatile") {
+		t.Errorf("volatile below the tool breakpoint must not flag, got %+v", fs)
+	}
+}
+
+// TestMsgSpanCountsTextNotJSON: the conversation span estimate must count
+// flattened text — raw JSON over-counted ~10x and hid below-minimum WARNs.
+func TestMsgSpanCountsTextNotJSON(t *testing.T) {
+	// 150 tiny block-array messages: text is trivial (~300 tokens of "ok"),
+	// but the raw JSON syntax is ~10x that.
+	var msgs []string
+	for i := 0; i < 149; i++ {
+		msgs = append(msgs, `{"role":"user","content":[{"type":"text","text":"ok"}]}`)
+	}
+	msgs = append(msgs, `{"role":"assistant","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[` + strings.Join(msgs, ",") + `]}`)
+	fs, err := checkBytes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasTitle(fs, "below the minimum") {
+		t.Errorf("tiny conversation span must WARN below-minimum (JSON syntax must not count), got %+v", fs)
+	}
+}
+
+// TestOpenAIVolatileAtEnd: with no stable prefix at all, the fallback scans
+// only the leading turn — a date in the FINAL user turn (where the fix text
+// says to put it) must not flag.
+func TestOpenAIVolatileAtEnd(t *testing.T) {
+	long := strings.Repeat("stable words ", 400)
+	body := []byte(`{"model":"gpt-4o","messages":[` +
+		`{"role":"user","content":"` + long + `"},` +
+		`{"role":"system","content":"mid-conversation note"},` +
+		`{"role":"user","content":"today is 2026-09-13, next question"}]}`)
+	fs, err := checkBytes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasTitle(fs, "Volatile") {
+		t.Errorf("volatile content at the end of the prompt must not flag, got %+v", fs)
+	}
+}
+
+func TestTTLDefaultNotDrift(t *testing.T) {
+	// {type:ephemeral} and {type:ephemeral,ttl:"5m"} are the same behavior.
+	a := []byte(`{"model":"claude-sonnet-4-5","system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}]}`)
+	b := []byte(`{"model":"claude-sonnet-4-5","system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral","ttl":"5m"}}]}`)
+	fs, err := diffBytes(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasTitle(fs, "breakpoints changed") {
+		t.Errorf("default vs explicit 5m must not read as drift, got %+v", fs)
+	}
+}
+
 func TestDiffBreakpointDrift(t *testing.T) {
 	// Byte-identical content, breakpoint removed in call B: the old diff
 	// returned a wrong OK; placement is part of the cache contract.

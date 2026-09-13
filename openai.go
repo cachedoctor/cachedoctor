@@ -34,7 +34,7 @@ type OAStreamOptions struct {
 func (r *OARequest) reportsUsage() bool {
 	// "input": null is not a Responses request — clients that serialize
 	// unused fields as null must keep their Chat Completions WARN.
-	if (len(r.Input) > 0 && !bytes.Equal(bytes.TrimSpace(r.Input), []byte("null"))) || r.Instructions != "" {
+	if rawPresent(r.Input) || r.Instructions != "" {
 		return true // Responses API streams always include usage
 	}
 	return !r.Stream || (r.StreamOptions != nil && r.StreamOptions.IncludeUsage)
@@ -69,6 +69,24 @@ func contentText(raw json.RawMessage) string {
 	return sb.String()
 }
 
+// leadingTurnText is the first message's text — the stable-leading-prefix
+// stand-in when a request has no tools, instructions, or leading system.
+func (r *OARequest) leadingTurnText() string {
+	if len(r.Messages) > 0 {
+		return r.Messages[0].text()
+	}
+	if items := r.inputItems(); len(items) > 0 {
+		return items[0].text()
+	}
+	return ""
+}
+
+// rawPresent reports a RawMessage that is present and not JSON null —
+// clients serializing unused fields as null must read as "absent".
+func rawPresent(raw json.RawMessage) bool {
+	return len(raw) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
 // inputItems returns Responses-API input as messages; a bare string input
 // becomes one user message.
 func (r *OARequest) inputItems() []OAMsg {
@@ -89,7 +107,9 @@ func (r *OARequest) inputItems() []OAMsg {
 // leading prefix and must not be credited to it.
 func (r *OARequest) prefixText() string {
 	var sb strings.Builder
-	sb.Write(r.Tools)
+	if rawPresent(r.Tools) {
+		sb.Write(r.Tools)
+	}
 	sb.WriteString(r.Instructions)
 	for _, m := range r.Messages {
 		if m.Role != "system" && m.Role != "developer" {
@@ -108,7 +128,9 @@ func (r *OARequest) prefixText() string {
 
 func (r *OARequest) promptText() string {
 	var sb strings.Builder
-	sb.Write(r.Tools)
+	if rawPresent(r.Tools) {
+		sb.Write(r.Tools)
+	}
 	sb.WriteString(r.Instructions)
 	for _, m := range r.Messages {
 		sb.WriteString(m.text())
@@ -137,7 +159,10 @@ func checkOpenAI(r *OARequest) []Finding {
 	prompt := r.promptText()
 	prefix := r.prefixText()
 	if strings.TrimSpace(prefix) == "" {
-		prefix = prompt
+		// No tools/instructions/leading-system: OpenAI's cacheable prefix is
+		// the leading turn — scanning the WHOLE prompt would flag volatile
+		// content at the end, exactly where the fix text says to put it.
+		prefix = r.leadingTurnText()
 	}
 	// Exact o200k BPE, not an estimate (framing tokens add a little on top,
 	// so this can only under-count — a below-minimum warning is never

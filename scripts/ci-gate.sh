@@ -23,7 +23,7 @@ FIXTURES="${CACHEDOCTOR_FIXTURES:-**/*.cachedoctor.json}"
 BASE_REF="${CACHEDOCTOR_BASE:-}"
 BIN="${CACHEDOCTOR_BIN:-cachedoctor}"
 
-command -v "$BIN" >/dev/null 2>&1 || [ -x "$BIN" ] || {
+command -v "$BIN" >/dev/null 2>&1 || { [ -f "$BIN" ] && [ -x "$BIN" ]; } || {
   echo "cachedoctor: binary '$BIN' not found — refusing to pass a gate that can't run" >&2
   exit 1
 }
@@ -48,7 +48,7 @@ fi
 # resolved in one git call instead of per-file probes.
 changed=""
 if [ -n "$BASE_REF" ]; then
-  changed="$(git diff --name-only --diff-filter=M "$BASE_REF" -- "${files[@]}" 2>/dev/null)"
+  changed="$(git -c core.quotepath=off diff --name-only --diff-filter=M "$BASE_REF" -- "${files[@]}" 2>/dev/null)"
 fi
 
 fail=0
@@ -78,8 +78,13 @@ for f in "${files[@]}"; do
 done
 
 status="✅ no cache/cost regressions found"
-[ "$errored" -eq 1 ] && status="⚠️ **gate error** — some fixtures could not be checked (see details)"
-[ "$fail" -eq 1 ] && status="🔴 **cache/cost regression detected** — see details below"
+if [ "$fail" -eq 1 ] && [ "$errored" -eq 1 ]; then
+  status="🔴 **cache/cost regression detected** · ⚠️ some fixtures could not be checked — see details"
+elif [ "$fail" -eq 1 ]; then
+  status="🔴 **cache/cost regression detected** — see details below"
+elif [ "$errored" -eq 1 ]; then
+  status="⚠️ **gate error** — some fixtures could not be checked (see details)"
+fi
 body="$status"$'\n'"$body"
 
 # Always write the run summary; post a PR comment when we have the context.

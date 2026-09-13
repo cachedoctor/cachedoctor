@@ -49,6 +49,9 @@ func countTokensCapped(s string) int {
 // heuristic over-counted whitespace/symbol runs by up to 25x, exactly the
 // direction that hides an ignored prefix.)
 func estTokens(s string) int {
+	if s == "" {
+		return 0 // don't load the vocab for nothing
+	}
 	return countTokensCapped(s) * 9 / 10
 }
 
