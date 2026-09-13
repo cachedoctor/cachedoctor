@@ -1,0 +1,44 @@
+name: update-pricing
+on:
+  schedule:
+    - cron: "17 8 * * 1" # weekly, Monday 08:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regenerate pricing.json from LiteLLM
+        run: sh scripts/update-pricing.sh
+      - name: Sanity-check the result
+        run: |
+          python3 - <<'PY'
+          import json
+          d = json.load(open('pricing.json'))
+          assert len(d) > 100, f"suspiciously few models: {len(d)}"
+          assert any(k.startswith('claude-') for k in d), "no Anthropic models"
+          assert any(k.startswith('gpt-') for k in d), "no OpenAI models"
+          for k, v in d.items():
+              assert len(v) == 3 and all(x >= 0 for x in v), f"bad row: {k} {v}"
+          print(f"ok: {len(d)} models")
+          PY
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: auto/update-pricing
+          commit-message: "pricing: refresh from LiteLLM price table"
+          title: "pricing: refresh from LiteLLM price table"
+          body: |
+            Automated weekly refresh of `pricing.json` from LiteLLM's
+            `model_prices_and_context_window.json`.
+
+            Before merging, review `familyRep` in `pricing.go`: if this diff
+            adds a new model family or generation, the family representatives
+            should point at the newest priced entry (the update script prints
+            the same reminder).
+          add-paths: pricing.json
+          delete-branch: true
