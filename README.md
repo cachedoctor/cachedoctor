@@ -35,7 +35,14 @@ pay full price. Run `observe` against real traffic and see which rows you're in.
 ## Install
 
 ```sh
-go build -o cachedoctor .     # or: go install github.com/cachedoctor/cachedoctor@latest
+go install github.com/cachedoctor/cachedoctor@latest   # or: go build -o cachedoctor .
+```
+
+`go install` drops the binary in Go's bin directory. If `cachedoctor: command
+not found`, that directory isn't on your `PATH` — add it once:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"   # append to ~/.zshrc or ~/.bashrc to persist
 ```
 
 ## Use
