@@ -52,22 +52,27 @@ type Block struct {
 // under-counted agent transcripts ~1000x and false-WARNed below-minimum.
 func (b Block) flatText() string {
 	var sb strings.Builder
-	b.appendFlat(&sb, 0)
+	// Total nested-Content bytes we're willing to re-parse: the true cost of
+	// hostile nesting is repeated Unmarshal of RawMessages, so it's budgeted
+	// directly. 4x the scan cap can't change a verdict (counts saturate at
+	// tokenScanCap); exhaustion under-counts, the safe direction.
+	budget := 4 * tokenScanCap
+	b.appendFlat(&sb, 0, &budget)
 	return sb.String()
 }
 
-// appendFlat is flatText's bounded worker. The depth cap and the scan-cap
-// early-out keep pathological nesting linear: naive recursion re-unmarshals
-// each level's RawMessage (which contains the whole remaining chain), an
+// appendFlat is flatText's bounded worker. Depth cap + scan-cap early-out +
+// parse budget keep pathological nesting cheap: naive recursion re-parsed
+// each level's RawMessage (containing the whole remaining chain), an
 // O(depth²) blowup measured at ~15s of CPU per MB — a DoS through observe
-// and CI-gate fixtures. Real tool_result nesting is 1-2 levels; past
-// tokenScanCap the token verdict can't change anyway.
-func (b Block) appendFlat(sb *strings.Builder, depth int) {
+// and CI-gate fixtures. Real tool_result nesting is 1-2 levels deep.
+func (b Block) appendFlat(sb *strings.Builder, depth int, budget *int) {
 	if depth > 20 || sb.Len() > tokenScanCap {
 		return
 	}
 	sb.WriteString(b.Text)
-	if len(b.Content) > 0 {
+	if len(b.Content) > 0 && *budget > 0 {
+		*budget -= len(b.Content)
 		if b.Content[0] == '"' {
 			var s string
 			json.Unmarshal(b.Content, &s)
@@ -76,7 +81,7 @@ func (b Block) appendFlat(sb *strings.Builder, depth int) {
 			var nested []Block
 			json.Unmarshal(b.Content, &nested)
 			for _, n := range nested {
-				n.appendFlat(sb, depth+1)
+				n.appendFlat(sb, depth+1, budget)
 			}
 		}
 	}
