@@ -32,12 +32,21 @@ type OAStreamOptions struct {
 }
 
 func (r *OARequest) reportsUsage() bool {
-	// "input": null is not a Responses request — clients that serialize
-	// unused fields as null must keep their Chat Completions WARN.
-	if rawPresent(r.Input) || r.Instructions != "" {
-		return true // Responses API streams always include usage
+	// The `input` KEY (even as an empty array) marks a Responses-API body —
+	// Chat Completions has no such field — and Responses streams always
+	// include usage. Only "input": null reads as absent (JS clients
+	// serialize unused fields as null).
+	if rawNonNull(r.Input) || r.Instructions != "" {
+		return true
 	}
 	return !r.Stream || (r.StreamOptions != nil && r.StreamOptions.IncludeUsage)
+}
+
+// rawNonNull: the field was sent with a real value (empty array counts —
+// distinct from rawPresent, which also treats [] as meaningless).
+func rawNonNull(raw json.RawMessage) bool {
+	t := bytes.TrimSpace(raw)
+	return len(t) > 0 && !bytes.Equal(t, []byte("null"))
 }
 
 type OAMsg struct {
