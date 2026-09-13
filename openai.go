@@ -81,10 +81,12 @@ func (r *OARequest) leadingTurnText() string {
 	return ""
 }
 
-// rawPresent reports a RawMessage that is present and not JSON null —
-// clients serializing unused fields as null must read as "absent".
+// rawPresent reports a RawMessage that is present and meaningful — clients
+// serializing unused fields as null or [] must read as "absent" (a literal
+// "[]" prefix would otherwise suppress the leading-turn volatile fallback).
 func rawPresent(raw json.RawMessage) bool {
-	return len(raw) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+	t := bytes.TrimSpace(raw)
+	return len(t) > 0 && !bytes.Equal(t, []byte("null")) && !bytes.Equal(t, []byte("[]"))
 }
 
 // inputItems returns Responses-API input as messages; a bare string input

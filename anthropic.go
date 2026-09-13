@@ -40,9 +40,36 @@ type Message struct {
 }
 
 type Block struct {
-	Type         string        `json:"type"`
-	Text         string        `json:"text"`
-	CacheControl *CacheControl `json:"cache_control"`
+	Type         string          `json:"type"`
+	Text         string          `json:"text"`
+	Content      json.RawMessage `json:"content,omitempty"` // tool_result: nested content (string or []Block)
+	Input        json.RawMessage `json:"input,omitempty"`   // tool_use: arguments JSON
+	CacheControl *CacheControl   `json:"cache_control"`
+}
+
+// flatText flattens a block's cacheable content: its text, tool_result
+// nested content (recursively), and tool_use arguments. Counting only .Text
+// under-counted agent transcripts ~1000x and false-WARNed below-minimum.
+func (b Block) flatText() string {
+	var sb strings.Builder
+	sb.WriteString(b.Text)
+	if len(b.Content) > 0 {
+		if b.Content[0] == '"' {
+			var s string
+			json.Unmarshal(b.Content, &s)
+			sb.WriteString(s)
+		} else {
+			var nested []Block
+			json.Unmarshal(b.Content, &nested)
+			for _, n := range nested {
+				sb.WriteString(n.flatText())
+			}
+		}
+	}
+	if len(b.Input) > 0 {
+		sb.Write(b.Input)
+	}
+	return sb.String()
 }
 
 // systemText flattens `system` (string or block array) to its text.
@@ -88,7 +115,7 @@ type bpInfo struct {
 
 func (r *Request) breakpointInfo() bpInfo {
 	var bi bpInfo
-	lastTool, lastSys, lastMsg := -1, -1, -1
+	lastTool, lastSys, lastMsg, lastMsgBlk := -1, -1, -1, -1
 	for i, t := range r.Tools {
 		if t.CacheControl != nil {
 			bi.n++
@@ -108,11 +135,11 @@ func (r *Request) breakpointInfo() bpInfo {
 		if len(m.Content) > 0 && m.Content[0] == '[' {
 			var blocks []Block
 			json.Unmarshal(m.Content, &blocks)
-			for _, b := range blocks {
+			for k, b := range blocks {
 				if b.CacheControl != nil {
 					bi.n++
 					bi.ttls = append(bi.ttls, b.CacheControl.TTL)
-					lastMsg = i
+					lastMsg, lastMsgBlk = i, k
 				}
 			}
 		}
@@ -124,7 +151,7 @@ func (r *Request) breakpointInfo() bpInfo {
 	case lastMsg >= 0:
 		bi.lastIn = "messages"
 		bi.volText = r.toolsTextUpTo(len(r.Tools)-1) + r.systemText()
-		bi.spanText = bi.volText + r.messagesTextUpTo(lastMsg)
+		bi.spanText = bi.volText + r.messagesTextUpTo(lastMsg, lastMsgBlk)
 	case lastSys >= 0:
 		bi.lastIn = "system"
 		bi.volText = r.toolsTextUpTo(len(r.Tools)-1) + r.systemTextUpTo(lastSys)
@@ -168,9 +195,12 @@ func (r *Request) systemTextUpTo(i int) string {
 	return sb.String()
 }
 
-// messagesTextUpTo flattens message TEXT through message index i — raw JSON
-// would over-count the span ~10x (measured) and hide below-minimum warnings.
-func (r *Request) messagesTextUpTo(i int) string {
+// messagesTextUpTo flattens cacheable message content through message index
+// i, cutting the FINAL message at block index blk (the span ends at the
+// breakpoint's block, not at the end of its message). Raw JSON would
+// over-count ~10x; .Text alone under-counts tool transcripts ~1000x —
+// flatText covers text, tool_result nested content, and tool_use input.
+func (r *Request) messagesTextUpTo(i, blk int) string {
 	var sb strings.Builder
 	for j, m := range r.Messages {
 		if j > i {
@@ -187,8 +217,11 @@ func (r *Request) messagesTextUpTo(i int) string {
 		}
 		var blocks []Block
 		json.Unmarshal(m.Content, &blocks)
-		for _, b := range blocks {
-			sb.WriteString(b.Text)
+		for k, b := range blocks {
+			if j == i && k > blk {
+				break
+			}
+			sb.WriteString(b.flatText())
 		}
 	}
 	return sb.String()
@@ -327,11 +360,15 @@ func check(r *Request) []Finding {
 
 	// R7 — volatility in the regenerated part of the cached (or would-be
 	// cached) span. Content BELOW the last breakpoint can change freely.
+	spanWord := "cached prefix"
+	if bi.n == 0 {
+		spanWord = "would-be cached prefix" // nothing is cached yet; don't imply otherwise
+	}
 	for _, v := range volatile {
 		if m := v.re.FindString(volatileRegion); m != "" {
 			f = append(f, Finding{"HIGH",
 				"Volatile content in the cached prefix",
-				fmt.Sprintf("Your cached prefix contains a volatile value (%s: %q). If it changes between calls, the prefix is no longer byte-identical and every call misses — silently, at full price.", v.name, clip(m, 40)),
+				fmt.Sprintf("Your %s contains a volatile value (%s: %q). If it changes between calls, the prefix is no longer byte-identical and every call misses — silently, at full price.", spanWord, v.name, clip(m, 40)),
 				"Move anything that changes (timestamps, IDs, dates) out of the cached prefix, or below the last cache_control breakpoint."})
 			break
 		}
@@ -410,9 +447,15 @@ func diff(a, b *Request) []Finding {
 // double-report on top of the "Tools reordered" finding.
 func cacheSig(r *Request) []string {
 	var sig []string
+	seen := map[string]int{}
 	for _, t := range r.Tools {
+		seen[t.Name]++
 		if t.CacheControl != nil {
-			sig = append(sig, fmt.Sprintf("tools[%s] ttl=%s", t.Name, ttlName(t.CacheControl.TTL)))
+			name := t.Name
+			if seen[t.Name] > 1 { // duplicate names: disambiguate by occurrence
+				name = fmt.Sprintf("%s#%d", t.Name, seen[t.Name])
+			}
+			sig = append(sig, fmt.Sprintf("tools[%s] ttl=%s", name, ttlName(t.CacheControl.TTL)))
 		}
 	}
 	for i, b := range r.systemBlocks() {

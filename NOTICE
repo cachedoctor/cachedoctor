@@ -7,6 +7,12 @@ Licensed under the Apache License, Version 2.0 (see LICENSE).
 Third-party attributions
 --------------------------------------------------------------------------------
 
+o200k_base.tiktoken.gz is the o200k_base tokenizer vocabulary from OpenAI's
+tiktoken (https://github.com/openai/tiktoken), redistributed under the MIT
+License, Copyright (c) 2022 OpenAI, Shantanu Jain (full text as below).
+testdata/o200k_vectors.json and testdata/o200k_fuzz.json contain token counts
+derived with tiktoken.
+
 pricing.json is derived from LiteLLM's model_prices_and_context_window.json
 (https://github.com/BerriAI/litellm), used under the MIT License:
 

@@ -103,7 +103,7 @@ func cmdAnalyze(path string) int {
 			oversized++
 			continue
 		}
-		line = bytes.TrimSpace(line)
+		line = bytes.TrimSpace(bytes.TrimPrefix(line, []byte("\xef\xbb\xbf")))
 		if len(line) == 0 {
 			if err == io.EOF {
 				break
@@ -249,6 +249,9 @@ func extractUsage(m map[string]any) urec {
 	u.model = str(m, "model")
 	u.cacheRead = num(m, "cache_read_input_tokens", "cache_read_tokens", "cached_tokens")
 	u.cacheWrite = num(m, "cache_creation_input_tokens", "cache_write_tokens")
+	if u.cacheWrite == 0 { // logs carrying only the per-TTL breakdown
+		u.cacheWrite = num(m, "ephemeral_5m_input_tokens") + num(m, "ephemeral_1h_input_tokens")
+	}
 	u.in = num(m, "input_tokens")
 	if u.in == 0 { // OpenAI Chat Completions: prompt_tokens includes the cached portion
 		if pt := num(m, "prompt_tokens"); pt > 0 {
@@ -306,8 +309,8 @@ func num(m map[string]any, keys ...string) float64 {
 	if f, ok := try(m); ok {
 		return f
 	}
-	inner := []string{"usage", "prompt_tokens_details", "input_tokens_details"}
-	for _, nest := range []string{"usage", "prompt_tokens_details", "input_tokens_details", "message", "response"} {
+	inner := []string{"usage", "prompt_tokens_details", "input_tokens_details", "cache_creation"}
+	for _, nest := range []string{"usage", "prompt_tokens_details", "input_tokens_details", "cache_creation", "message", "response"} {
 		if sub, ok := m[nest].(map[string]any); ok {
 			if f, ok := try(sub); ok {
 				return f
@@ -347,15 +350,20 @@ func str(m map[string]any, key string) string {
 }
 
 func toF(v any) (float64, bool) {
+	finite := func(f float64) bool {
+		// ParseFloat accepts "NaN"/"Inf" — one poisoned string must not
+		// destroy every total; negatives are garbage for token counts.
+		return !math.IsNaN(f) && !math.IsInf(f, 0) && f >= 0
+	}
 	switch x := v.(type) {
 	case float64:
-		return x, true
+		return x, finite(x)
 	case json.Number:
 		f, err := x.Float64()
-		return f, err == nil
+		return f, err == nil && finite(f)
 	case string:
 		f, err := strconv.ParseFloat(x, 64)
-		return f, err == nil
+		return f, err == nil && finite(f)
 	}
 	return 0, false
 }

@@ -80,13 +80,30 @@ func rateFor(model string) (in, read, write float64, ok bool) {
 		return 0, 0, 0, false
 	}
 	keys := []string{m}
+	// OpenAI fine-tune slugs ("ft:gpt-4o-2024-08-06:org::id"): prefer the
+	// exact ft: pricing entry for the base model, then the base model itself
+	// — the generic gpt fallback priced these 4-5x too high.
+	if strings.HasPrefix(m, "ft:") {
+		base := m[3:]
+		if i := strings.Index(base, ":"); i >= 0 {
+			base = base[:i]
+		}
+		keys = append(keys, "ft:"+base, base)
+		m = base // family tokens below should see the base name
+	}
 	if t := dateSuffix.ReplaceAllString(m, ""); t != m {
 		keys = append(keys, t)
 	}
 	for _, fr := range familyRep {
-		if strings.Contains(m, fr.token) {
-			keys = append(keys, fr.key)
+		if !strings.Contains(m, fr.token) {
+			continue
 		}
+		// dash-anchored variant tokens (-sol, -cyber, ...) additionally
+		// require an OpenAI-ish name: "sec-cyber-scanner" must not price.
+		if strings.HasPrefix(fr.token, "-") && !strings.Contains(m, "gpt") {
+			continue
+		}
+		keys = append(keys, fr.key)
 	}
 	for _, k := range keys {
 		if p, found := prices[k]; found {

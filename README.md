@@ -12,7 +12,7 @@ is working, *why* it isn't, and how much it's costing you.
 Caching applies wherever **the same tokens lead the prompt on consecutive calls**
 — and in most production LLM apps the stable prefix is 80–95% of every request.
 A support bot resending a 10k-token system-prompt-plus-tools prefix on 100k
-calls/day pays ~$3,000/day for it uncached vs ~$300/day cached (Sonnet rates).
+calls/day pays ~$3,000/day for it uncached vs ~$300/day cached (Sonnet 4.5 rates).
 Every row below has a way to *silently* break byte-identity — that's the leak
 this tool finds:
 
@@ -129,7 +129,7 @@ a red check on the PR instead of a surprise on next month's bill.
 ```
 $ cachedoctor check request.json
 🔴 HIGH — Volatile content in the cached prefix
-    Your tools/system prefix contains a volatile value (ISO timestamp:
+    Your cached prefix contains a volatile value (ISO timestamp:
     "2026-09-12T14:30"). If it changes between calls, the prefix is no longer
     byte-identical and every call misses — silently, at full price.
     fix: Move anything that changes (timestamps, IDs, dates) out of the cached

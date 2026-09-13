@@ -396,8 +396,10 @@ func extractUsageBytes(b []byte, model string, seam int) urec {
 		return mx
 	}
 	u.cacheRead = maxField("cache_read_input_tokens")
+	oaCached := false
 	if u.cacheRead == 0 {
 		u.cacheRead = maxField("cached_tokens")
+		oaCached = u.cacheRead > 0
 	}
 	u.cacheWrite = maxField("cache_creation_input_tokens")
 	u.in = maxField("input_tokens")
@@ -406,6 +408,12 @@ func extractUsageBytes(b []byte, model string, seam int) urec {
 			if u.in = pt - u.cacheRead; u.in < 0 {
 				u.in = 0
 			}
+		}
+	} else if oaCached {
+		// OpenAI (cached_tokens): input_tokens INCLUDES the cached portion —
+		// without this, cached tokens bill at input AND read rates.
+		if u.in -= u.cacheRead; u.in < 0 {
+			u.in = 0
 		}
 	}
 	u.out = maxField("output_tokens")

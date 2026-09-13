@@ -14,8 +14,8 @@
 #   GITHUB_TOKEN          token for `gh pr comment`      (optional)
 set -uo pipefail
 
-if ((BASH_VERSINFO[0] < 4)); then
-  echo "cachedoctor: this gate needs bash >= 4 (for globstar); found $BASH_VERSION" >&2
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+  echo "cachedoctor: this gate needs bash >= 4.4 (globstar-aware compgen); found $BASH_VERSION" >&2
   exit 1
 fi
 
@@ -48,7 +48,10 @@ fi
 # resolved in one git call instead of per-file probes.
 changed=""
 if [ -n "$BASE_REF" ]; then
-  changed="$(git -c core.quotepath=off diff --name-only --diff-filter=M "$BASE_REF" -- "${files[@]}" 2>/dev/null)"
+  if ! changed="$(git -c core.quotepath=off diff --name-only --diff-filter=M "$BASE_REF" -- "${files[@]}")"; then
+    echo "cachedoctor: git diff against '$BASE_REF' failed — refusing to skip regression checks silently" >&2
+    exit 1
+  fi
 fi
 
 fail=0

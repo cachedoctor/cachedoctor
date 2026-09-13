@@ -727,6 +727,49 @@ func TestMsgSpanCountsTextNotJSON(t *testing.T) {
 // TestOpenAIVolatileAtEnd: with no stable prefix at all, the fallback scans
 // only the leading turn — a date in the FINAL user turn (where the fix text
 // says to put it) must not flag.
+// TestMsgBlockLevelCut: the span ends at the breakpoint's BLOCK inside the
+// final message — later blocks in the same message must not count.
+func TestMsgBlockLevelCut(t *testing.T) {
+	big := strings.Repeat("stable words ", 800)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[` +
+		`{"type":"text","text":"tiny","cache_control":{"type":"ephemeral","ttl":"1h"}},` +
+		`{"type":"text","text":"` + big + `"}]}]}`)
+	fs, err := checkBytes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasTitle(fs, "below the minimum") {
+		t.Errorf("span cut at breakpoint block: tiny span must WARN, got %+v", fs)
+	}
+	// breakpoint on the LAST block: the big text counts, no WARN
+	body2 := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[` +
+		`{"type":"text","text":"` + big + `"},` +
+		`{"type":"text","text":"tiny","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`)
+	fs, _ = checkBytes(body2)
+	if hasTitle(fs, "below the minimum") {
+		t.Errorf("breakpoint on last block: big span must not WARN, got %+v", fs)
+	}
+}
+
+// TestToolTranscriptSpan: tool_result nested content and tool_use input are
+// cacheable span content — an agent transcript with a final-message
+// breakpoint must not false-WARN below-minimum.
+func TestToolTranscriptSpan(t *testing.T) {
+	bigResult := strings.Repeat("file contents line here ", 600)
+	body := []byte(`{"model":"claude-sonnet-4-5","system":"agent","messages":[` +
+		`{"role":"user","content":"do the task"},` +
+		`{"role":"assistant","content":[{"type":"tool_use","input":{"path":"main.go"}}]},` +
+		`{"role":"user","content":[{"type":"tool_result","content":[{"type":"text","text":"` + bigResult + `"}]}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"done","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`)
+	fs, err := checkBytes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasTitle(fs, "below the minimum") {
+		t.Errorf("tool_result content must count toward the span, got %+v", fs)
+	}
+}
+
 func TestOpenAIVolatileAtEnd(t *testing.T) {
 	long := strings.Repeat("stable words ", 400)
 	body := []byte(`{"model":"gpt-4o","messages":[` +
@@ -804,5 +847,60 @@ func TestMinPrefixTokens(t *testing.T) {
 		if got := r.minPrefixTokens(); got != want {
 			t.Errorf("minPrefixTokens(%s) = %d, want %d", model, got, want)
 		}
+	}
+}
+
+func TestRateForFineTuneSlugs(t *testing.T) {
+	// real OpenAI fine-tune model strings: ft:<base>:<org>::<id>
+	in, _, _, ok := rateFor("ft:gpt-4o-2024-08-06:acme::abc123")
+	if !ok || in >= 10.0 {
+		t.Errorf("ft slug priced at in=%v ok=%v — must use base/ft rates, not the astra catch-all", in, ok)
+	}
+	if _, _, _, ok := rateFor("sec-cyber-scanner"); ok {
+		t.Error("non-gpt name with a variant token must not price")
+	}
+}
+
+func TestToFRejectsGarbage(t *testing.T) {
+	// "NaN"/"Inf" parse as valid floats and poisoned every total; negatives
+	// deflated sibling rows.
+	for _, v := range []any{"NaN", "Inf", "-Infinity", "-100", float64(-5)} {
+		if f, ok := toF(v); ok {
+			t.Errorf("toF(%v) accepted %v — must reject non-finite/negative", v, f)
+		}
+	}
+	if f, ok := toF("500"); !ok || f != 500 {
+		t.Errorf("toF(\"500\") = %v ok=%v", f, ok)
+	}
+}
+
+func TestExtractUsageBytesResponsesCached(t *testing.T) {
+	// OpenAI Responses: input_tokens INCLUDES cached_tokens — observe must
+	// subtract or cached tokens bill at input AND read rates.
+	body := []byte(`{"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":600},"output_tokens":10}}`)
+	u := extractUsageBytes(body, "gpt-4o", -1)
+	if u.in != 400 || u.cacheRead != 600 {
+		t.Errorf("responses usage: in=%v read=%v, want 400/600", u.in, u.cacheRead)
+	}
+	// Anthropic: input_tokens EXCLUDES cache reads — no subtraction
+	body2 := []byte(`{"usage":{"input_tokens":100,"cache_read_input_tokens":900}}`)
+	u = extractUsageBytes(body2, "claude-sonnet-5", -1)
+	if u.in != 100 || u.cacheRead != 900 {
+		t.Errorf("anthropic usage: in=%v read=%v, want 100/900", u.in, u.cacheRead)
+	}
+}
+
+func TestExtractUsageWriteBreakdown(t *testing.T) {
+	m := map[string]any{
+		"model": "claude-sonnet-5",
+		"usage": map[string]any{
+			"cache_creation": map[string]any{
+				"ephemeral_5m_input_tokens": float64(100000),
+				"ephemeral_1h_input_tokens": float64(50000),
+			},
+		},
+	}
+	if u := extractUsage(m); u.cacheWrite != 150000 {
+		t.Errorf("per-TTL write breakdown: cacheWrite=%v, want 150000", u.cacheWrite)
 	}
 }

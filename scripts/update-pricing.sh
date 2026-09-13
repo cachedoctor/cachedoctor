@@ -3,10 +3,13 @@
 set -e
 cd "$(dirname "$0")/.."  # pricing.json lives at the repo root
 URL=https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
-curl -sL "$URL" -o /tmp/litellm_prices.json
+TMP_JSON="$(mktemp)"
+export TMP_JSON
+trap 'rm -f "$TMP_JSON"' EXIT
+curl -sL "$URL" -o "$TMP_JSON"
 python3 - <<'PY'
-import json
-d = json.load(open('/tmp/litellm_prices.json'))
+import json, os
+d = json.load(open(os.environ['TMP_JSON']))
 out = {}
 for k, v in d.items():
     if not isinstance(v, dict): continue
