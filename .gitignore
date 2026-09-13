@@ -7,3 +7,6 @@
 
 # internal design notes — not public
 DESIGN.md
+
+# goreleaser build output
+/dist/

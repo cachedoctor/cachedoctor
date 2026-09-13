@@ -1,0 +1,81 @@
+# GoReleaser config — prebuilt cross-platform binaries so non-Go users skip
+# the toolchain and PATH dance. https://goreleaser.com
+version: 2
+
+project_name: cachedoctor
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: cachedoctor
+    main: .
+    binary: cachedoctor
+    env:
+      - CGO_ENABLED=0 # pure Go (pricing + o200k vocab are go:embed'd) — fully static
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}" # reproducible builds
+
+archives:
+  - id: cachedoctor
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # cachedoctor_1.0.0_darwin_arm64.tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: cachedoctor
+    name: cachedoctor
+  # Fill in an existing release (e.g. the v1.0.0 tag) rather than erroring if
+  # one is already there.
+  mode: replace
+  footer: |
+    ## Install
+
+    Download the archive for your OS/arch below, unpack it, and put the
+    `cachedoctor` binary somewhere on your `PATH`. Or, with Go installed:
+    `go install github.com/cachedoctor/cachedoctor@latest`.
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+# Homebrew tap — enable once the tap repo exists.
+#
+#   1. Create a public repo: github.com/cachedoctor/homebrew-tap
+#   2. Add a repo/org secret HOMEBREW_TAP_GITHUB_TOKEN (a PAT or fine-grained
+#      token with contents:write on that tap repo) and pass it to the release
+#      workflow's goreleaser step.
+#   3. Uncomment this block. Users then: brew install cachedoctor/tap/cachedoctor
+#
+# brews:
+#   - name: cachedoctor
+#     repository:
+#       owner: cachedoctor
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     homepage: "https://github.com/cachedoctor/cachedoctor"
+#     description: "Find out why your LLM prompt cache isn't saving you money"
+#     license: "Apache-2.0"
+#     test: |
+#       system "#{bin}/cachedoctor", "-h"
