@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -20,42 +19,37 @@ var volatile = []struct {
 	{"date", regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)},
 	{"clock time", regexp.MustCompile(`\b\d{1,2}:\d{2}:\d{2}\b`)},
 	{"UUID", regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)},
-	{"epoch/long number", regexp.MustCompile(`\b\d{10,13}\b`)},
+	// epochs: 10 digits starting with 1 (seconds, 2001–2033) or 13 (ms) —
+	// anchored on the leading 1 so phone numbers and ISBNs don't false-HIGH
+	{"epoch timestamp", regexp.MustCompile(`\b1\d{9}\b|\b1\d{12}\b`)},
 	{"phrase like \"today is\"", regexp.MustCompile(`(?i)\b(today is|current (date|time)|as of|right now)\b`)},
+}
+
+// tokenScanCap bounds how many bytes threshold rules tokenize. Every
+// threshold in the tool is <= 4096 tokens; past 256KB the verdict cannot
+// change, and unbounded BPE on a 32MB proxied body costs seconds and
+// gigabytes (measured) for nothing.
+const tokenScanCap = 256 << 10
+
+// countTokensCapped is countTokensO200k over at most tokenScanCap bytes —
+// a floor, which for >=-threshold checks is exactly as good.
+func countTokensCapped(s string) int {
+	if len(s) > tokenScanCap {
+		s = s[:runeFloor(s, tokenScanCap)]
+	}
+	return countTokensO200k(s)
 }
 
 // estTokens estimates tokens for content with no exact tokenizer available
 // (Anthropic's is unpublished; `check --exact` gets real counts from the
-// count_tokens API). Script-aware, calibrated against o200k measurements
-// (prose ≈5.2 bytes/token, symbol-heavy ≈3.3; CJK counted per rune:
-// Han ≈1.45 runes/token, kana ≈1.5, hangul ≈1.85). Divisors lean toward
-// under-counting: the failure mode is an extra borderline warning, never a
-// silently-missed below-minimum prefix.
+// count_tokens API). It is the exact o200k count with a 10% safety discount:
+// both tokenizers are byte-level BPEs of similar density, and the discount
+// keeps errors on the under-counting side — an extra borderline warning,
+// never a silently-missed below-minimum prefix. (An earlier bytes-per-token
+// heuristic over-counted whitespace/symbol runs by up to 25x, exactly the
+// direction that hides an ignored prefix.)
 func estTokens(s string) int {
-	var han, kana, hangul float64
-	var latinBytes, proseBytes int
-	for _, r := range s {
-		switch {
-		case unicode.Is(unicode.Han, r):
-			han++
-		case unicode.Is(unicode.Hiragana, r), unicode.Is(unicode.Katakana, r):
-			kana++
-		case unicode.Is(unicode.Hangul, r):
-			hangul++
-		default:
-			sz := utf8.RuneLen(r)
-			latinBytes += sz
-			if r == ' ' || unicode.IsLetter(r) {
-				proseBytes += sz
-			}
-		}
-	}
-	tok := han/1.45 + kana/1.5 + hangul/1.85
-	if latinBytes > 0 {
-		proseFrac := float64(proseBytes) / float64(latinBytes)
-		tok += float64(latinBytes) / (3.3 + 1.9*proseFrac)
-	}
-	return int(tok)
+	return countTokensCapped(s) * 9 / 10
 }
 
 // firstDiff shows the first point where two strings diverge, with context.

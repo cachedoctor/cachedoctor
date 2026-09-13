@@ -34,6 +34,10 @@ func main() {
 		if len(os.Args) != 4 {
 			usage()
 		}
+		if os.Args[2] == "-" && os.Args[3] == "-" {
+			fmt.Fprintln(os.Stderr, "cachedoctor: only one diff argument can be \"-\" (stdin can be read once)")
+			usage()
+		}
 		os.Exit(cmdDiff(os.Args[2], os.Args[3]))
 	case "analyze":
 		if len(os.Args) != 3 {
@@ -63,13 +67,14 @@ usage:
   cachedoctor check [--exact] <request.json>    scan one Anthropic request for cache anti-patterns
   cachedoctor diff  <callA.json> <callB.json>   show what broke byte-identity between two calls
   cachedoctor analyze <logs.jsonl>              real hit rate + $/mo recoverable from a usage log
-  cachedoctor observe [--port N] [--upstream URL]  live proxy: diagnose real traffic as it flows
+  cachedoctor observe [--port N] [--upstream URL] [--include-usage]
+                                                live proxy: diagnose real traffic as it flows
 
 Any path may be "-" to read from stdin (e.g. cat req.json | cachedoctor check -).
 Token counts: OpenAI is exact (embedded o200k tokenizer); Anthropic is a
 calibrated estimate, or exact with --exact + ANTHROPIC_API_KEY (two free
 count_tokens metadata calls — nothing is billed, the key is never stored).
-check exits 2 if any high-severity issue is found (useful in CI).
+check and diff exit 2 if any high-severity issue is found (useful in CI).
 Anthropic and OpenAI are supported; other providers in a log are skipped.
 `)
 }
@@ -132,6 +137,12 @@ func checkBytes(b []byte) ([]Finding, error) {
 	if !isJSONObject(b) {
 		return nil, errors.New("not a request object")
 	}
+	if m := peekModel(b); m != "" && otherProvider(m) {
+		// Llama/Gemini/etc have no cache_control; running Anthropic rules
+		// against them produces confidently wrong advice (and a bogus exit 2
+		// through the CI gate).
+		return nil, fmt.Errorf("model %q: only Anthropic and OpenAI are supported", m)
+	}
 	if providerOf(peekModel(b)) == "openai" {
 		var oa OARequest
 		if err := json.Unmarshal(b, &oa); err != nil {
@@ -150,6 +161,11 @@ func checkBytes(b []byte) ([]Finding, error) {
 func diffBytes(ba, bb []byte) ([]Finding, error) {
 	if !isJSONObject(ba) || !isJSONObject(bb) {
 		return nil, errors.New("invalid JSON")
+	}
+	for _, b := range [][]byte{ba, bb} {
+		if m := peekModel(b); m != "" && otherProvider(m) {
+			return nil, fmt.Errorf("model %q: only Anthropic and OpenAI are supported", m)
+		}
 	}
 	if providerOf(peekModel(ba)) == "openai" || providerOf(peekModel(bb)) == "openai" {
 		var a, b OARequest

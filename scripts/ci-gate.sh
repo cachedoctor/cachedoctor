@@ -3,6 +3,9 @@
 # against the base branch), summarize, comment on the PR, and fail the build on
 # any high-severity cache/cost regression.
 #
+# Fail-closed by design: a missing binary, an unparseable fixture, or a bad
+# base ref FAILS the gate — a gate that can't run must never read as green.
+#
 # Config (env):
 #   CACHEDOCTOR_FIXTURES  glob of request JSON fixtures  (default **/*.cachedoctor.json)
 #   CACHEDOCTOR_BASE      base git ref to diff against   (optional; enables regression detection)
@@ -11,12 +14,31 @@
 #   GITHUB_TOKEN          token for `gh pr comment`      (optional)
 set -uo pipefail
 
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "cachedoctor: this gate needs bash >= 4 (for globstar); found $BASH_VERSION" >&2
+  exit 1
+fi
+
 FIXTURES="${CACHEDOCTOR_FIXTURES:-**/*.cachedoctor.json}"
 BASE_REF="${CACHEDOCTOR_BASE:-}"
 BIN="${CACHEDOCTOR_BIN:-cachedoctor}"
 
+command -v "$BIN" >/dev/null 2>&1 || [ -x "$BIN" ] || {
+  echo "cachedoctor: binary '$BIN' not found — refusing to pass a gate that can't run" >&2
+  exit 1
+}
+
+if [ -n "$BASE_REF" ]; then
+  git rev-parse --verify --quiet "$BASE_REF^{commit}" >/dev/null || {
+    echo "cachedoctor: base ref '$BASE_REF' does not resolve — did the checkout fetch it (fetch-depth)?" >&2
+    exit 1
+  }
+fi
+
 shopt -s globstar nullglob
-files=( $FIXTURES )
+# compgen splits on newlines, not IFS — paths with spaces survive.
+files=()
+while IFS= read -r f; do files+=("$f"); done < <(compgen -G "$FIXTURES" || true)
 if [ ${#files[@]} -eq 0 ]; then
   echo "cachedoctor: no request fixtures matched '$FIXTURES' — nothing to check."
   exit 0
@@ -30,22 +52,33 @@ if [ -n "$BASE_REF" ]; then
 fi
 
 fail=0
+errored=0
 body="## 🩺 cachedoctor — prompt-cache / cost gate"$'\n'
 for f in "${files[@]}"; do
   out="$("$BIN" check "$f" 2>&1)"; rc=$?
-  [ "$rc" -eq 2 ] && fail=1
+  case $rc in
+    0) ;;
+    2) fail=1 ;;
+    *) errored=1; out="⚠️ check failed (exit $rc) — a fixture the gate can't check fails the gate:"$'\n'"$out" ;;
+  esac
+  # 4-backtick fences: fixture-derived text containing ``` can't break out.
   body+=$'\n'"<details><summary><code>$f</code></summary>"$'\n\n'
-  body+='```'$'\n'"$out"$'\n''```'$'\n'"</details>"$'\n'
+  body+='````'$'\n'"$out"$'\n''````'$'\n'"</details>"$'\n'
 
   # regression check: diff a changed fixture against its base-branch version
   if [ -n "$changed" ] && printf '%s\n' "$changed" | grep -qxF "$f"; then
     out="$(git show "$BASE_REF:$f" | "$BIN" diff - "$f" 2>&1)"; rc=$?
-    [ "$rc" -eq 2 ] && fail=1
-    body+="**regression vs \`$BASE_REF\`:**"$'\n\n''```'$'\n'"$out"$'\n''```'$'\n'
+    case $rc in
+      0) ;;
+      2) fail=1 ;;
+      *) errored=1; out="⚠️ diff failed (exit $rc):"$'\n'"$out" ;;
+    esac
+    body+="**regression vs \`$BASE_REF\`:**"$'\n\n''````'$'\n'"$out"$'\n''````'$'\n'
   fi
 done
 
 status="✅ no cache/cost regressions found"
+[ "$errored" -eq 1 ] && status="⚠️ **gate error** — some fixtures could not be checked (see details)"
 [ "$fail" -eq 1 ] && status="🔴 **cache/cost regression detected** — see details below"
 body="$status"$'\n'"$body"
 
@@ -54,11 +87,16 @@ body="$status"$'\n'"$body"
 printf '%s\n' "$body"
 if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${CACHEDOCTOR_PR:-}" ]; then
   printf '%s\n' "$body" | \
-    gh pr comment "$CACHEDOCTOR_PR" --edit-last --create-if-none --body-file - 2>/dev/null || true
+    gh pr comment "$CACHEDOCTOR_PR" --edit-last --create-if-none --body-file - \
+    || echo "cachedoctor: PR comment not posted (non-fatal)" >&2
 fi
 
 if [ "$fail" -eq 1 ]; then
   echo "cachedoctor: failing the build — high-severity cache/cost finding(s)."
+  exit 1
+fi
+if [ "$errored" -eq 1 ]; then
+  echo "cachedoctor: failing the build — fixture(s) could not be checked."
   exit 1
 fi
 echo "cachedoctor: clean."

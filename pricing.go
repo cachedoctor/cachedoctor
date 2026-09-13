@@ -24,6 +24,19 @@ func init() {
 
 var dateSuffix = regexp.MustCompile(`(-\d{8}|-\d{4}-\d{2}-\d{2}|-latest|-v\d+:\d+)$`)
 
+// otherProvider recognizes model names that clearly belong to neither
+// Anthropic nor OpenAI. Shared by pricing (don't invent rates) and the CLI
+// router (don't apply cache_control rules to providers that don't have it).
+func otherProvider(model string) bool {
+	m := strings.ToLower(model)
+	for _, o := range []string{"llama", "gemini", "mistral", "mixtral", "qwen", "deepseek", "grok", "command", "gpt-oss"} {
+		if strings.Contains(m, o) {
+			return true
+		}
+	}
+	return false
+}
+
 // familyRep maps a model-family token to a representative LiteLLM key, so a
 // model not priced exactly (a newer or private name) still gets its family's
 // real rate. Ordered specific-first. Representatives should track each
@@ -63,10 +76,8 @@ func rateFor(model string) (in, read, write float64, ok bool) {
 	// Not Anthropic/OpenAI: a name like "llama-3.1-sonnetto" or an
 	// open-weights "gpt-oss-120b" must not be priced by substring match —
 	// confidently wrong rates are worse than "unsupported, skipped".
-	for _, other := range []string{"llama", "gemini", "mistral", "mixtral", "qwen", "deepseek", "grok", "command", "gpt-oss"} {
-		if strings.Contains(m, other) {
-			return 0, 0, 0, false
-		}
+	if otherProvider(m) {
+		return 0, 0, 0, false
 	}
 	keys := []string{m}
 	if t := dateSuffix.ReplaceAllString(m, ""); t != m {

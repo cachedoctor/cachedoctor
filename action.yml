@@ -26,11 +26,15 @@ runs:
         cache: false
     - name: Install cachedoctor
       shell: bash
+      env:
+        # env indirection, not raw ${{ }} interpolation into the script —
+        # the canonical GitHub Actions injection hardening.
+        CD_VERSION: ${{ inputs.version }}
       run: |
         BIN_DIR="$RUNNER_TEMP/cachedoctor-bin"
         mkdir -p "$BIN_DIR"
-        if [ -n "${{ inputs.version }}" ]; then
-          GOBIN="$BIN_DIR" go install github.com/cachedoctor/cachedoctor@${{ inputs.version }}
+        if [ -n "$CD_VERSION" ]; then
+          GOBIN="$BIN_DIR" go install "github.com/cachedoctor/cachedoctor@$CD_VERSION"
         else
           (cd "${{ github.action_path }}" && go build -o "$BIN_DIR/cachedoctor" .)
         fi

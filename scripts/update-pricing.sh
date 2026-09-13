@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 # Regenerate pricing.json from LiteLLM's model price table (Anthropic + OpenAI).
 set -e
+cd "$(dirname "$0")/.."  # pricing.json lives at the repo root
 URL=https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
 curl -sL "$URL" -o /tmp/litellm_prices.json
 python3 - <<'PY'

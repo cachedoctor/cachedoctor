@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -31,6 +32,7 @@ type observer struct {
 	client       *http.Client
 	mu           sync.Mutex
 	n            int
+	metered      int // requests whose usage was priced into byModel
 	byModel      map[string]*agg
 	findings     map[string]int
 	// seenPfx tracks recently seen cacheable-prefix representations per
@@ -44,12 +46,19 @@ type observer struct {
 const seenPfxCap = 16 // per provider|model; beyond this, drift detection resets
 
 func cmdObserve(args []string) int {
-	fs := flag.NewFlagSet("observe", flag.ExitOnError)
+	// ContinueOnError: a flag typo must exit 64, not flag's default 2 —
+	// exit 2 is the documented "HIGH finding" contract.
+	fs := flag.NewFlagSet("observe", flag.ContinueOnError)
 	port := fs.Int("port", 7070, "local port to listen on")
 	upstream := fs.String("upstream", "", "force one upstream base URL (else route by path)")
 	includeUsage := fs.Bool("include-usage", false,
 		"set stream_options.include_usage on OpenAI streaming requests so usage is measurable (the one deliberate exception to read-only; clients see the extra usage chunk)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		usage()
+	}
 
 	o := &observer{
 		upstream:     strings.TrimRight(*upstream, "/"),
@@ -273,11 +282,9 @@ func flushCopy(w http.ResponseWriter, r io.Reader) {
 }
 
 func (o *observer) observe(prov, path string, status int, reqBody, respBody []byte, respSeam int) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.n++
-	idx := o.n
-
+	// Parsing, rule checks, and BPE token counting are the expensive part —
+	// do them all OUTSIDE the mutex so one large request can't stall every
+	// other request's observation behind the lock.
 	var findings []Finding
 	var model, pfx string
 	switch prov {
@@ -302,6 +309,12 @@ func (o *observer) observe(prov, path string, status int, reqBody, respBody []by
 			model = peekModel(reqBody)
 		}
 	}
+	u := extractUsageBytes(respBody, model, respSeam)
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.n++
+	idx := o.n
 	if pfx != "" {
 		key := prov + "|" + model
 		seen := o.seenPfx[key]
@@ -319,13 +332,15 @@ func (o *observer) observe(prov, path string, status int, reqBody, respBody []by
 		seen[pfx] = true
 	}
 
-	u := extractUsageBytes(respBody, model, respSeam)
 	hitStr := "—"
 	if inR, readR, writeR, ok := rateFor(u.model); ok && u.in+u.cacheRead+u.cacheWrite > 0 {
+		o.metered++
 		getAgg(o.byModel, u.model).add(u, inR, readR, writeR)
 		if total := u.in + u.cacheRead + u.cacheWrite; total > 0 {
 			hitStr = fmt.Sprintf("%.0f%%", 100*u.cacheRead/total)
 		}
+	} else if u.in+u.cacheRead+u.cacheWrite > 0 {
+		hitStr = "unpriced" // usage was reported, but the model isn't Anthropic/OpenAI
 	}
 
 	sev := "🟢"
@@ -416,8 +431,12 @@ func (o *observer) summary() {
 		tRead += a.cacheRead
 		tWrite += a.cacheWrite
 	}
-	fmt.Printf("%d requests · hit rate %.0f%% · spent ~$%.2f · recoverable ~$%.2f (this session)\n",
-		o.n, hitPct(tIn, tRead, tWrite), tSpent, tRecover)
+	metered := ""
+	if o.metered < o.n {
+		metered = fmt.Sprintf(" (%d metered)", o.metered)
+	}
+	fmt.Printf("%d requests%s · hit rate %.0f%% · spent ~$%.2f · recoverable ~$%.2f (this session)\n",
+		o.n, metered, hitPct(tIn, tRead, tWrite), tSpent, tRecover)
 	if len(o.findings) > 0 {
 		type fc struct {
 			t string
@@ -427,7 +446,12 @@ func (o *observer) summary() {
 		for t, c := range o.findings {
 			list = append(list, fc{t, c})
 		}
-		sort.Slice(list, func(i, j int) bool { return list[i].c > list[j].c })
+		sort.Slice(list, func(i, j int) bool { // count desc, then title, for stable output
+			if list[i].c != list[j].c {
+				return list[i].c > list[j].c
+			}
+			return list[i].t < list[j].t
+		})
 		fmt.Println("\nfindings seen:")
 		for _, x := range list {
 			fmt.Printf("  ×%d  %s\n", x.c, x.t)

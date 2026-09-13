@@ -41,10 +41,15 @@ func (a *agg) add(u urec, inR, readR, writeR float64) {
 	a.spent += (u.in*inR + u.cacheRead*readR + u.cacheWrite*writeR) / 1e6
 	total := u.in + u.cacheRead + u.cacheWrite
 	if want := targetHit*total - u.cacheRead; want > 0 {
-		if want > u.in {
-			want = u.in // can only recover currently-full-price tokens
+		// Full-price input converting to cache reads...
+		fromIn := math.Min(want, u.in)
+		a.recoverable += fromIn * (inR - readR) / 1e6
+		// ...and cache writes that should have been reads (write-without-
+		// read traffic pays the write premium for nothing; on a warm cache
+		// those tokens bill at the read rate instead).
+		if rem := want - fromIn; rem > 0 && writeR > readR {
+			a.recoverable += math.Min(rem, u.cacheWrite) * (writeR - readR) / 1e6
 		}
-		a.recoverable += want * (inR - readR) / 1e6
 	}
 }
 
@@ -136,9 +141,9 @@ func cmdAnalyze(path string) int {
 		fmt.Fprintf(os.Stderr, "cachedoctor: skipped %d oversized line(s) (>8MB)\n", oversized)
 	}
 	if parsed == 0 {
-		fmt.Println("cachedoctor: no usable Anthropic/OpenAI usage records found (need model + token counts).")
+		fmt.Fprintln(os.Stderr, "cachedoctor: no usable Anthropic/OpenAI usage records found (need model + token counts).")
 		if skipped > 0 {
-			fmt.Printf("  (%d records skipped — only Anthropic and OpenAI are supported)\n", skipped)
+			fmt.Fprintf(os.Stderr, "  (%d records skipped — only Anthropic and OpenAI are supported)\n", skipped)
 		}
 		return 1
 	}
@@ -170,8 +175,12 @@ func cmdAnalyze(path string) int {
 		tRead += a.cacheRead
 		tWrite += a.cacheWrite
 	}
-	sort.Slice(models, func(i, j int) bool {
-		return byModel[models[i]].recoverable > byModel[models[j]].recoverable
+	sort.Slice(models, func(i, j int) bool { // recoverable desc, then name, for stable output
+		ri, rj := byModel[models[i]].recoverable, byModel[models[j]].recoverable
+		if ri != rj {
+			return ri > rj
+		}
+		return models[i] < models[j]
 	})
 
 	fmt.Printf("cachedoctor · analyze %s\n\n", path)

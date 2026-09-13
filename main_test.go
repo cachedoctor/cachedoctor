@@ -615,19 +615,115 @@ func TestFirstDiff(t *testing.T) {
 	}
 }
 
+func hasTitle(fs []Finding, sub string) bool {
+	for _, f := range fs {
+		if strings.Contains(f.Title, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestVolatileDetection(t *testing.T) {
-	req := []byte(`{"model":"claude-sonnet-4-5","system":"Today is 2026-09-12, be helpful.","tools":[{"name":"t","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`)
+	// Volatile date INSIDE the cached span (breakpoint on the system block).
+	req := []byte(`{"model":"claude-sonnet-4-5","system":[{"type":"text","text":"Today is 2026-09-12, be helpful.","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`)
 	fs, err := checkBytes(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, f := range fs {
-		if f.Sev == "HIGH" && strings.Contains(f.Title, "Volatile") {
-			found = true
-		}
-	}
-	if !found {
+	if !hasTitle(fs, "Volatile") {
 		t.Errorf("want volatile-content HIGH finding, got %+v", fs)
+	}
+}
+
+// TestBreakpointPositionAware locks in the position semantics: the cached
+// span ends at the LAST breakpoint (render order tools → system → messages).
+func TestBreakpointPositionAware(t *testing.T) {
+	// 1. Tools-only breakpoint: volatile content in the (uncached) system
+	// prompt must NOT flag — it sits below the breakpoint, exactly where the
+	// fix text tells users to put it.
+	toolsOnly := []byte(`{"model":"claude-sonnet-4-5","system":"Today is 2026-09-12.","tools":[{"name":"t","description":"d","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`)
+	fs, err := checkBytes(toolsOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasTitle(fs, "Volatile") {
+		t.Errorf("volatile below the breakpoint must not flag, got %+v", fs)
+	}
+
+	// 2. Conversation-only breakpoint (what cachedoctord's injectConversation
+	// emits): the span includes tools+system+history, so a long conversation
+	// must not get a bogus "below the minimum" WARN.
+	long := strings.Repeat("stable conversation content. ", 400)
+	convo := []byte(`{"model":"claude-sonnet-4-5","system":"You are helpful.","messages":[` +
+		`{"role":"user","content":"` + long + `"},` +
+		`{"role":"assistant","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`)
+	fs, err = checkBytes(convo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasTitle(fs, "below the minimum") {
+		t.Errorf("conversation-breakpoint span is large; below-minimum WARN is wrong: %+v", fs)
+	}
+	// its default-TTL sibling in messages WOULD have been missed before:
+	convoDefaultTTL := bytes.Replace(convo, []byte(`,"ttl":"1h"`), nil, 1)
+	fs, err = checkBytes(convoDefaultTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasTitle(fs, "5-minute") {
+		t.Errorf("message-block breakpoint with default TTL must WARN, got %+v", fs)
+	}
+}
+
+func TestDiffBreakpointDrift(t *testing.T) {
+	// Byte-identical content, breakpoint removed in call B: the old diff
+	// returned a wrong OK; placement is part of the cache contract.
+	a := []byte(`{"model":"claude-sonnet-4-5","system":[{"type":"text","text":"stable","cache_control":{"type":"ephemeral"}}]}`)
+	b := []byte(`{"model":"claude-sonnet-4-5","system":[{"type":"text","text":"stable"}]}`)
+	fs, err := diffBytes(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasTitle(fs, "breakpoints changed") {
+		t.Errorf("want breakpoint-drift HIGH, got %+v", fs)
+	}
+	// TTL change alone also flags
+	c := []byte(`{"model":"claude-sonnet-4-5","system":[{"type":"text","text":"stable","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`)
+	fs, _ = diffBytes(a, c)
+	if !hasTitle(fs, "breakpoints changed") {
+		t.Errorf("want TTL-drift HIGH, got %+v", fs)
+	}
+}
+
+func TestUnsupportedProviderRejected(t *testing.T) {
+	// Llama/Gemini bodies must error (exit 1), not get Anthropic advice and
+	// a bogus exit-2 through the CI gate.
+	body := []byte(`{"model":"llama-3.1-70b-instruct","system":"` + strings.Repeat("stable ", 500) + `"}`)
+	if _, err := checkBytes(body); err == nil {
+		t.Error("llama body: want unsupported-provider error, got verdict")
+	}
+	if _, err := diffBytes(body, body); err == nil {
+		t.Error("llama diff: want unsupported-provider error")
+	}
+}
+
+func TestMinPrefixTokens(t *testing.T) {
+	cases := map[string]int{
+		"claude-fable-5-1":          512,
+		"claude-opus-5":             512,
+		"claude-haiku-4-5-20251001": 4096,
+		"claude-opus-4-6":           4096,
+		"claude-opus-4-7":           2048,
+		"claude-3-5-haiku-20241022": 2048,
+		"claude-opus-4-8":           1024,
+		"claude-sonnet-4-5":         1024,
+		"claude-sonnet-5":           1024,
+	}
+	for model, want := range cases {
+		r := &Request{Model: model}
+		if got := r.minPrefixTokens(); got != want {
+			t.Errorf("minPrefixTokens(%s) = %d, want %d", model, got, want)
+		}
 	}
 }

@@ -6,8 +6,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -70,47 +73,62 @@ func (r *Request) systemBlocks() []Block {
 }
 
 // breakpoints counts cache_control markers across tools, system, messages.
-func (r *Request) breakpoints() int {
-	n := 0
+// bpInfo describes the cache_control breakpoints of a request, positioned in
+// the documented render order tools → system → messages. The cached span is
+// everything up to and including the LAST breakpoint — rules that ignore
+// position misdiagnose real bodies (e.g. a conversation-only breakpoint
+// caches tools+system+history, not "nothing").
+type bpInfo struct {
+	n                   int
+	tools, system, msgs int      // breakpoint count per region
+	ttls                []string // TTLs of every breakpoint ("" = 5m default)
+	lastIn              string   // "tools" | "system" | "messages" | ""
+	msgSpanText         string   // messages text up to the last message-region breakpoint
+}
+
+func (r *Request) breakpointInfo() bpInfo {
+	var bi bpInfo
 	for _, t := range r.Tools {
 		if t.CacheControl != nil {
-			n++
+			bi.tools++
+			bi.ttls = append(bi.ttls, t.CacheControl.TTL)
+			bi.lastIn = "tools"
 		}
 	}
 	for _, b := range r.systemBlocks() {
 		if b.CacheControl != nil {
-			n++
+			bi.system++
+			bi.ttls = append(bi.ttls, b.CacheControl.TTL)
+			bi.lastIn = "system"
 		}
 	}
-	for _, m := range r.Messages {
+	lastMsg := -1
+	for i, m := range r.Messages {
 		if len(m.Content) > 0 && m.Content[0] == '[' {
 			var blocks []Block
 			json.Unmarshal(m.Content, &blocks)
 			for _, b := range blocks {
 				if b.CacheControl != nil {
-					n++
+					bi.msgs++
+					bi.ttls = append(bi.ttls, b.CacheControl.TTL)
+					bi.lastIn = "messages"
+					lastMsg = i
 				}
 			}
 		}
 	}
-	return n
+	if lastMsg >= 0 {
+		var sb strings.Builder
+		for i := 0; i <= lastMsg; i++ {
+			sb.Write(r.Messages[i].Content)
+		}
+		bi.msgSpanText = sb.String()
+	}
+	bi.n = bi.tools + bi.system + bi.msgs
+	return bi
 }
 
-// ttls returns every cache_control TTL found (empty string = 5m default).
-func (r *Request) ttls() []string {
-	var out []string
-	for _, t := range r.Tools {
-		if t.CacheControl != nil {
-			out = append(out, t.CacheControl.TTL)
-		}
-	}
-	for _, b := range r.systemBlocks() {
-		if b.CacheControl != nil {
-			out = append(out, b.CacheControl.TTL)
-		}
-	}
-	return out
-}
+func (r *Request) breakpoints() int { return r.breakpointInfo().n }
 
 func (r *Request) toolsText() string {
 	var sb strings.Builder
@@ -122,39 +140,80 @@ func (r *Request) toolsText() string {
 	return sb.String()
 }
 
+// minPrefixTokens per the prompt-caching docs (verified 2026-09): below the
+// model's minimum, cache_control is silently ignored. Unknown models take
+// their family's strictest (highest) minimum — over-warning beats silently
+// missing an ignored prefix.
 func (r *Request) minPrefixTokens() int {
-	if strings.Contains(strings.ToLower(r.Model), "haiku") {
+	m := strings.ToLower(r.Model)
+	switch {
+	case strings.Contains(m, "fable-5"), strings.Contains(m, "opus-5"),
+		strings.Contains(m, "mythos-5"):
+		return 512
+	case strings.Contains(m, "haiku-4-5"), strings.Contains(m, "opus-4-6"),
+		strings.Contains(m, "opus-4-5"):
+		return 4096
+	case strings.Contains(m, "opus-4-7"), strings.Contains(m, "mythos-preview"),
+		strings.Contains(m, "haiku-3"), strings.Contains(m, "3-5-haiku"):
 		return 2048
+	case strings.Contains(m, "haiku"): // unknown haiku: strictest known
+		return 4096
+	default: // opus-4-8, sonnet 4.5/4.6/5, unknown models
+		return 1024
 	}
-	return 1024
 }
 
-// prefixRepr is a stable representation of the cacheable prefix, used by
-// observe to detect drift between consecutive calls.
+// prefixRepr fingerprints the regenerated-per-call prefix (full tool
+// definitions + system text), used by observe to detect drift between
+// consecutive calls. Tool bodies are included: a changed description or
+// schema invalidates the cache exactly like a changed name.
 func prefixRepr(r *Request) string {
-	return strings.Join(toolNames(r), ",") + "\x00" + r.systemText()
+	h := fnv.New64a()
+	io.WriteString(h, r.toolsText())
+	h.Write([]byte{0})
+	io.WriteString(h, r.systemText())
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 func check(r *Request) []Finding {
 	var f []Finding
-	bp := r.breakpoints()
-	prefix := r.toolsText() + r.systemText()
-	prefixTok := estTokens(prefix)
-	approx := "~" // estimate marker; dropped when count_tokens gives exact numbers
+	bi := r.breakpointInfo()
+
+	// Exact tools+system token count when armed (check --exact).
+	tsTok := estTokens(r.toolsText() + r.systemText())
+	tsApprox := "~"
 	if anthropicExactCount != nil {
 		if n, err := anthropicExactCount(); err == nil {
-			prefixTok, approx = n, ""
+			tsTok, tsApprox = n, ""
 		} else {
 			fmt.Fprintf(os.Stderr, "cachedoctor: count_tokens failed (%v); falling back to the estimate\n", err)
 		}
 	}
 
+	// The cached span is everything up to the LAST breakpoint in render
+	// order (tools → system → messages). The volatile scan covers only the
+	// regenerated-per-call portion of that span — appended conversation
+	// history is byte-stable once written and would false-positive.
+	spanTok, spanApprox := tsTok, tsApprox
+	volatileRegion := r.toolsText() + r.systemText()
+	spanName := "tools+system prefix"
+	switch bi.lastIn {
+	case "tools":
+		volatileRegion = r.toolsText()
+		spanTok, spanApprox = estTokens(volatileRegion), "~"
+		spanName = "tools prefix (the breakpoint is on a tool)"
+	case "messages":
+		spanTok = tsTok + estTokens(bi.msgSpanText)
+		spanApprox = "~" // conversation part is always estimated
+		spanName = "tools+system+conversation span (the breakpoint is on a message)"
+	}
+
 	// R1 — no caching at all
-	if bp == 0 {
-		if prefixTok >= 500 {
+	if bi.n == 0 {
+		if tsTok >= 500 {
 			f = append(f, Finding{"HIGH",
 				"No prompt caching enabled",
-				fmt.Sprintf("There is no cache_control anywhere, but your tools+system prefix is %s%d tokens of stable, reusable content — currently billed at full price on every call.", approx, prefixTok),
+				fmt.Sprintf("There is no cache_control anywhere, but your tools+system prefix is %s%d tokens of stable, reusable content — currently billed at full price on every call.", tsApprox, tsTok),
 				"Add cache_control (ephemeral, ttl:\"1h\") to the last tool and/or the end of the system prompt."})
 		} else {
 			f = append(f, Finding{"INFO",
@@ -164,37 +223,38 @@ func check(r *Request) []Finding {
 		// with nothing cached, the rest of the prefix rules are moot
 	} else {
 		// R6 — too many breakpoints
-		if bp > 4 {
+		if bi.n > 4 {
 			f = append(f, Finding{"HIGH",
-				fmt.Sprintf("%d cache breakpoints (max is 4)", bp),
-				"Anthropic honors at most 4 cache_control breakpoints; extras are ignored.",
-				"Keep 4 or fewer, at the stable/volatile boundaries."})
+				fmt.Sprintf("%d cache breakpoints (max is 4)", bi.n),
+				"The API rejects requests with more than 4 cache_control breakpoints (400 error) — this request fails outright.",
+				"Keep 4 or fewer breakpoints, at the stable/volatile boundaries."})
 		}
-		// R3 — sub-threshold prefix
-		if prefixTok < r.minPrefixTokens() {
+		// R3 — sub-threshold cached span
+		if spanTok < r.minPrefixTokens() {
 			f = append(f, Finding{"WARN",
 				"Cached prefix may be below the minimum",
-				fmt.Sprintf("The cacheable prefix is %s%d tokens; below ~%d, cache_control is silently ignored for this model.", approx, prefixTok, r.minPrefixTokens()),
+				fmt.Sprintf("The %s is %s%d tokens; below ~%d, cache_control is silently ignored for this model.", spanName, spanApprox, spanTok, r.minPrefixTokens()),
 				"Cache a longer stable prefix, or accept that caching won't engage here."})
 		}
-		// R2 — default 5-minute TTL
-		for _, ttl := range r.ttls() {
+		// R2 — default 5-minute TTL (any breakpoint, wherever it sits)
+		for _, ttl := range bi.ttls {
 			if ttl == "" {
 				f = append(f, Finding{"WARN",
 					"Using the default 5-minute cache TTL",
-					"cache_control without an explicit ttl expires after 5 minutes (changed from 1h on 2026-03-06). If your calls are spaced further apart, every one misses.",
+					"cache_control without an explicit ttl expires after 5 minutes. If your calls are spaced further apart, every one misses.",
 					"Set ttl:\"1h\" for spaced-out reuse, or keep the cache warm."})
 				break
 			}
 		}
 	}
 
-	// R7 — volatility in the (would-be) cached prefix: breaks byte-identity
+	// R7 — volatility in the regenerated part of the cached (or would-be
+	// cached) span. Content BELOW the last breakpoint can change freely.
 	for _, v := range volatile {
-		if m := v.re.FindString(prefix); m != "" {
+		if m := v.re.FindString(volatileRegion); m != "" {
 			f = append(f, Finding{"HIGH",
 				"Volatile content in the cached prefix",
-				fmt.Sprintf("Your tools/system prefix contains a volatile value (%s: %q). If it changes between calls, the prefix is no longer byte-identical and every call misses — silently, at full price.", v.name, clip(m, 40)),
+				fmt.Sprintf("Your cached prefix contains a volatile value (%s: %q). If it changes between calls, the prefix is no longer byte-identical and every call misses — silently, at full price.", v.name, clip(m, 40)),
 				"Move anything that changes (timestamps, IDs, dates) out of the cached prefix, or below the last cache_control breakpoint."})
 			break
 		}
@@ -248,12 +308,65 @@ func diff(a, b *Request) []Finding {
 			"Move anything call-specific out of the system prompt (or below the cache breakpoint)."})
 	}
 
+	// breakpoints: placement and TTL are part of the cache contract — writes
+	// happen only at breakpoints, so a moved, retimed, or vanished breakpoint
+	// invalidates reuse even when every byte of content matches.
+	ca, cb := cacheSig(a), cacheSig(b)
+	if !slices.Equal(ca, cb) {
+		f = append(f, Finding{"HIGH",
+			"Cache breakpoints changed between calls",
+			fmt.Sprintf("call A: %s\n    call B: %s\n    Cache entries are written only at breakpoint positions; matching content with different breakpoints does not reuse the cache.", sigString(ca), sigString(cb)),
+			"Keep cache_control placement and TTLs identical across calls."})
+	}
+
 	if len(f) == 0 {
 		f = append(f, Finding{"OK",
 			"Cacheable prefix is byte-identical",
-			"Tools and system prompt match exactly between the two calls — the prefix should hit the cache. If you're still missing, check the TTL (see `check`) or call spacing.", ""})
+			"Tools, system prompt, and cache breakpoints match exactly between the two calls — the prefix should hit the cache. If you're still missing, check the TTL (see `check`) or call spacing. (Conversation-history divergence is not compared.)", ""})
 	}
 	return f
+}
+
+// cacheSig is the ordered list of breakpoint positions and TTLs — the part
+// of the cache contract that byte-comparing content can't see.
+func cacheSig(r *Request) []string {
+	var sig []string
+	for i, t := range r.Tools {
+		if t.CacheControl != nil {
+			sig = append(sig, fmt.Sprintf("tools[%d] ttl=%s", i, ttlName(t.CacheControl.TTL)))
+		}
+	}
+	for i, b := range r.systemBlocks() {
+		if b.CacheControl != nil {
+			sig = append(sig, fmt.Sprintf("system[%d] ttl=%s", i, ttlName(b.CacheControl.TTL)))
+		}
+	}
+	for i, m := range r.Messages {
+		if len(m.Content) > 0 && m.Content[0] == '[' {
+			var blocks []Block
+			json.Unmarshal(m.Content, &blocks)
+			for j, b := range blocks {
+				if b.CacheControl != nil {
+					sig = append(sig, fmt.Sprintf("messages[%d].content[%d] ttl=%s", i, j, ttlName(b.CacheControl.TTL)))
+				}
+			}
+		}
+	}
+	return sig
+}
+
+func ttlName(ttl string) string {
+	if ttl == "" {
+		return "5m(default)"
+	}
+	return ttl
+}
+
+func sigString(sig []string) string {
+	if len(sig) == 0 {
+		return "(no cache_control)"
+	}
+	return strings.Join(sig, ", ")
 }
 
 func toolNames(r *Request) []string {

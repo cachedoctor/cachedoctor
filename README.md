@@ -47,7 +47,7 @@ cachedoctor diff  <callA.json> <callB.json>   # show what broke byte-identity
 cachedoctor analyze <logs.jsonl>              # real hit rate + $/mo recoverable
 ```
 
-`check` exits `2` if it finds a high-severity issue — drop it in CI.
+`check` and `diff` exit `2` on a high-severity issue — drop them in CI.
 
 **stdin:** any file argument can be `-`, so you can pipe instead of writing files:
 
@@ -75,7 +75,7 @@ call, and a running hit rate — plus a session summary on Ctrl-C:
 
 ```
 🔴 #1 anthropic /v1/messages → 200 · hit 0%  · No prompt caching enabled
-🔴 #2 anthropic /v1/messages → 200 · hit 0%  · Cacheable prefix changed since the previous call
+🔴 #2 anthropic /v1/messages → 200 · hit 0%  · New cacheable prefix (drifted from previous calls?)
 ── session summary ──
 2 requests · hit rate 0% · spent ~$0.42 · recoverable ~$18.30 (this session)
 ```
@@ -157,10 +157,10 @@ Try it on the bundled [`examples/`](examples/).
 - No `cache_control` at all on a large, stable prefix
 - Volatile content in the cached prefix (timestamps, dates, UUIDs, "today is…")
   — the #1 silent byte-identity breaker
-- Default **5-minute TTL** (the 2026-03-06 regression) when reuse is spaced out
-- Cacheable prefix below the model minimum (1024 / 2048 tokens) → silently ignored
-- More than 4 cache breakpoints
-- `diff`: tools reordered / changed, or system prompt drift (byte-level pinpoint)
+- Default **5-minute TTL** when reuse is spaced further apart than 5 minutes
+- Cacheable prefix below the model minimum (512–4096 tokens by model) → silently ignored
+- More than 4 cache breakpoints (the API rejects the request)
+- `diff`: tools reordered / changed, system prompt drift (byte-level pinpoint), or cache breakpoints moved / retimed / removed
 
 **OpenAI (automatic caching):** OpenAI auto-caches the longest *byte-identical*
 prefix ≥1024 tokens, so the manual rules (cache_control, TTL, breakpoints) don't

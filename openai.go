@@ -136,8 +136,9 @@ func checkOpenAI(r *OARequest) []Finding {
 		prefix = prompt
 	}
 	// Exact o200k BPE, not an estimate (framing tokens add a little on top,
-	// so this can only under-count — a below-minimum warning is never missed).
-	tok := countTokensO200k(prompt)
+	// so this can only under-count — a below-minimum warning is never
+	// missed). Capped: past 256KB the 1024 threshold is long since settled.
+	tok := countTokensCapped(prompt)
 
 	if tok < 1024 {
 		f = append(f, Finding{"WARN",
