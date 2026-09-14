@@ -1,5 +1,5 @@
 name: cachedoctor
-description: Catch prompt-cache / LLM-cost regressions in your PRs before they hit the bill — the CI gate for cachedoctor, the Anthropic/OpenAI cache diagnostic (CLI + read-only observe proxy).
+description: Catch prompt-cache / LLM-cost regressions in your PRs before they hit the bill - CI gate for the cachedoctor CLI + proxy.
 branding:
   icon: activity
   color: green
