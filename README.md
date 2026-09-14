@@ -39,6 +39,18 @@ pay full price. Run `observe` against real traffic and see which rows you're in.
 
 ## Install
 
+**Prebuilt binary** (no Go toolchain needed) — grab the archive for your
+platform from the [latest release](https://github.com/cachedoctor/cachedoctor/releases/latest),
+or on macOS/Linux:
+
+```sh
+# picks the right darwin/linux + amd64/arm64 build and installs to /usr/local/bin
+curl -fsSL https://github.com/cachedoctor/cachedoctor/releases/latest/download/cachedoctor_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz \
+  | tar -xz cachedoctor && sudo mv cachedoctor /usr/local/bin/
+```
+
+**With Go:**
+
 ```sh
 go install github.com/cachedoctor/cachedoctor@latest   # or: go build -o cachedoctor .
 ```

@@ -26,9 +26,10 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    # cachedoctor_1.0.0_darwin_arm64.tar.gz
+    # Version-less names so releases/latest/download/cachedoctor_<os>_<arch>.tar.gz
+    # is a stable URL (the README's one-line installer relies on it).
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
     files:
       - README.md
       - LICENSE
