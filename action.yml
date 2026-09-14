@@ -1,5 +1,5 @@
 name: cachedoctor
-description: Fail the build on prompt-cache / LLM-cost regressions, and comment the impact on the PR.
+description: Catch prompt-cache / LLM-cost regressions in your PRs before they hit the bill — the CI gate for cachedoctor, the Anthropic/OpenAI cache diagnostic (CLI + read-only observe proxy).
 branding:
   icon: activity
   color: green
