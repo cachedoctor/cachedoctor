@@ -1,5 +1,10 @@
 # cachedoctor
 
+[![ci](https://github.com/cachedoctor/cachedoctor/actions/workflows/ci.yml/badge.svg)](https://github.com/cachedoctor/cachedoctor/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/cachedoctor/cachedoctor?sort=semver)](https://github.com/cachedoctor/cachedoctor/releases/latest)
+[![Go 1.24+](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 **Find out why your LLM prompt cache isn't saving you money.**
 
 Prompt caching cuts input cost up to ~90% — but it fails *silently*. A
