@@ -21,6 +21,7 @@
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
+  html, body { overflow-x: hidden; }
   body {
     background: linear-gradient(160deg, var(--bg2), var(--bg) 55%);
     color: var(--text);
@@ -52,6 +53,7 @@
   .install {
     font-family: var(--mono); font-size: 14.5px; background: var(--panel);
     border: 1px solid var(--line); border-radius: 10px; padding: 12px 18px; color: var(--text);
+    overflow-wrap: anywhere; word-break: break-word; max-width: 100%;
   }
   .install b { color: var(--green); font-weight: 500; }
   .btn {
@@ -75,12 +77,12 @@
   .term .c { color: #5C7699; } .term .g { color: var(--green); } .term .t { color: var(--teal-hi); }
   .term .r { color: var(--red); } .term .y { color: var(--amber); } .term .p { color: var(--muted); }
 
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 28px 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 16px; margin: 28px 0; }
   .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
   .stat .n { font-size: 30px; font-weight: 750; color: var(--green); letter-spacing: -.5px; }
   .stat .d { color: var(--muted); font-size: 14.5px; margin-top: 6px; }
 
-  .cmds { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .cmds { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
   .cmd { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; }
   .cmd code.name { font-family: var(--mono); color: var(--green); font-size: 15px; }
   .cmd p { color: var(--muted); font-size: 14.5px; margin-top: 8px; }
@@ -100,7 +102,24 @@
   ul.why li::before { content: "＋"; position: absolute; left: 0; top: 0; color: var(--green); font-weight: 700; }
 
   footer { border-top: 1px solid var(--line); padding: 34px 0 50px; color: var(--muted); font-size: 14.5px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-  @media (max-width: 640px) { .sub { font-size: 17px; } section { padding: 36px 0; } }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 18px; }
+    nav { flex-direction: column; align-items: flex-start; gap: 12px; padding: 18px 0; }
+    nav .links { gap: 14px 18px; flex-wrap: wrap; }
+    header { padding: 36px 0 30px; }
+    .grid-vis { margin-bottom: 28px; gap: 6px; }
+    h1 { font-size: clamp(26px, 8vw, 40px); }
+    .sub { font-size: 17px; }
+    section { padding: 34px 0; }
+    h2 { font-size: 22px; }
+    .cta-row { flex-direction: column; align-items: stretch; }
+    .btn { text-align: center; }
+    .install { width: 100%; font-size: 12.5px; padding: 11px 14px; }
+    .term { font-size: 12px; }
+    .term pre { padding: 14px; }
+    .stat, .cmd { padding: 18px; }
+    footer { flex-direction: column; gap: 8px; }
+  }
 </style>
 </head>
 <body>
@@ -204,7 +223,7 @@
 </section>
 
 <section id="cachedoctord" style="border-top: 1px solid var(--line);">
-  <div style="border: 1px solid var(--teal); border-radius: 16px; padding: 34px 34px 30px; background: linear-gradient(160deg, rgba(20,184,166,.07), rgba(20,184,166,.02));">
+  <div style="border: 1px solid var(--teal); border-radius: 16px; padding: clamp(20px, 5vw, 34px); background: linear-gradient(160deg, rgba(20,184,166,.07), rgba(20,184,166,.02));">
     <div style="font-size:12.5px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; color:var(--teal-hi); margin-bottom:10px;">cachedoctord · early access</div>
     <h2>Diagnosis is free. The fix runs in-flight.</h2>
     <p class="lede" style="margin-bottom:18px;">The CLI tells you where the money leaks. <b style="color:var(--text)">cachedoctord</b> is the commercial companion proxy that closes the leaks continuously — and proves the savings on your real traffic.</p>
